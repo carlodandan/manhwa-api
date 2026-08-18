@@ -3,7 +3,7 @@
 import { BASE_URL, cleanText, absoluteUrl } from '../utils';
 
 /**
- * Parse the autocomplete HTML and return webtoon results.
+ * Parse the autocomplete HTML and return manhwa results.
  */
 export function parseSearchHtml(html: string): any[] {
   const results: any[] = [];
@@ -60,7 +60,7 @@ export function parseSearchHtml(html: string): any[] {
 /**
  * Fetch autocomplete suggestions for a search term.
  */
-export async function searchWebtoon(term: string): Promise<any[]> {
+export async function searchManhwa(term: string): Promise<any[]> {
   const url = `${BASE_URL}/autocomplete?term=${encodeURIComponent(term)}`;
   const response = await fetch(url);
 

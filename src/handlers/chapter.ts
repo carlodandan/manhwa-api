@@ -8,10 +8,10 @@ import { BASE_URL, cleanText, absoluteUrl } from '../utils';
 export function parseChapterHtml(html: string): any {
   const result: any = {};
 
-  // Webtoon title (inside <h1>)
+  // Manhwa title (inside <h1>)
   const titleMatch = html.match(/<h1>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/);
   if (titleMatch) {
-    result.webtoon_title = cleanText(titleMatch[1]);
+    result.manhwa_title = cleanText(titleMatch[1]);
   }
 
   // Chapter title (inside <h2>)
@@ -52,7 +52,7 @@ export function parseChapterHtml(html: string): any {
     }
   }
 
-  // Images: extract all <img> tags whose src contains "sv2/comic/" (webtoon pages)
+  // Images: extract all <img> tags whose src contains "sv2/comic/" (manhwa pages)
   const allImgTags = html.match(/<img[^>]*src="([^"]*)"[^>]*>/g);
   if (allImgTags) {
     const images: string[] = [];

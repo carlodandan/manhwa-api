@@ -1,11 +1,11 @@
-// src/handlers/webtoon.ts
+// src/handlers/manhwa.ts
 
 import { BASE_URL, cleanText, absoluteUrl } from '../utils';
 
 /**
- * Parse the webtoon detail HTML and extract structured data.
+ * Parse the manhwa detail HTML and extract structured data.
  */
-export function parseWebtoonHtml(html: string): any {
+export function parseManhwaHtml(html: string): any {
   const result: any = {};
 
   // Title
@@ -100,16 +100,16 @@ export function parseWebtoonHtml(html: string): any {
 }
 
 /**
- * Fetch and parse webtoon details by slug.
+ * Fetch and parse manhwa details by slug.
  */
-export async function fetchWebtoon(slug: string): Promise<any> {
-  const webtoonUrl = `${BASE_URL}/webtoon/${slug}/`;
-  const response = await fetch(webtoonUrl);
+export async function fetchManhwa(slug: string): Promise<any> {
+  const manhwaUrl = `${BASE_URL}/manhwa/${slug}/`;
+  const response = await fetch(manhwaUrl);
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch webtoon (${slug}): ${response.status}`);
+    throw new Error(`Failed to fetch manhwa (${slug}): ${response.status}`);
   }
 
   const html = await response.text();
-  return parseWebtoonHtml(html);
+  return parseManhwaHtml(html);
 }

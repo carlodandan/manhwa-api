@@ -3,7 +3,7 @@
 import { BASE_URL, absoluteUrl } from '../utils';
 
 /**
- * Fetch the most-viewed webtoon list for a given period.
+ * Fetch the most-viewed manhwa list for a given period.
  */
 export async function fetchMostViewed(period: string): Promise<any> {
   const url = `${BASE_URL}/api/most-viewed/?period=${period}`;
@@ -16,10 +16,10 @@ export async function fetchMostViewed(period: string): Promise<any> {
   const data = await response.json();
 
   // Normalize cover_url to absolute
-  if (data.webtoon && Array.isArray(data.webtoon)) {
-    data.webtoon = data.webtoon.map((webtoon: any) => ({
-      ...webtoon,
-      cover_url: absoluteUrl(webtoon.cover_url),
+  if (data.manhwa && Array.isArray(data.manhwa)) {
+    data.manhwa = data.manhwa.map((manhwa: any) => ({
+      ...manhwa,
+      cover_url: absoluteUrl(manhwa.cover_url),
     }));
   }
 

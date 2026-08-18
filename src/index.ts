@@ -1,9 +1,9 @@
 // src/index.ts
 
 import { fetchAllMostViewed } from './handlers/mostViewed';
-import { fetchWebtoon } from './handlers/webtoon';
+import { fetchManhwa } from './handlers/manhwa';
 import { fetchChapter } from './handlers/chapter';
-import { searchWebtoon } from './handlers/search';
+import { searchManhwa } from './handlers/search';
 
 export default {
   async fetch(request: Request): Promise<Response> {
@@ -38,11 +38,11 @@ export default {
         endpoints: [
           {
             path: '/home',
-            description: 'Most-viewed webtoon (periods: 1d, 1w, 1m)',
+            description: 'Most-viewed manhwa (periods: 1d, 1w, 1m)',
           },
           {
-            path: '/webtoon/{slug}',
-            description: 'Webtoon details by slug',
+            path: '/manhwa/{slug}',
+            description: 'Manhwa details by slug',
           },
           {
             path: '/reader/en/{slug}-chapter-{chapterNumber}',
@@ -50,7 +50,7 @@ export default {
           },
           {
             path: '/autocomplete?term={query}',
-            description: 'Search webtoon by term',
+            description: 'Search manhwa by term',
           },
         ],
       }, 200, 3600); // Cache for 1 hour
@@ -70,13 +70,13 @@ export default {
         // Home: most-viewed
         responseData = await fetchAllMostViewed();
         cacheDuration = 300;
-      } else if (path.startsWith('/webtoon/')) {
-        // Webtoon detail
+      } else if (path.startsWith('/manhwa/')) {
+        // Manhwa detail
         const slug = path.split('/')[2];
         if (!slug) {
           return jsonResponse({ error: 'Invalid slug' }, 400);
         }
-        responseData = await fetchWebtoon(slug);
+        responseData = await fetchManhwa(slug);
         cacheDuration = 600;
       } else if (path.startsWith('/reader/en/')) {
         // Chapter reader
@@ -90,7 +90,7 @@ export default {
       } else if (path === '/autocomplete') {
         // Search autocomplete
         const term = url.searchParams.get('term') || '';
-        responseData = await searchWebtoon(term);
+        responseData = await searchManhwa(term);
         cacheDuration = 300;
       } else {
         return jsonResponse({ error: 'Not found' }, 404);
