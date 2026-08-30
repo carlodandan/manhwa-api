@@ -11,10 +11,19 @@ export interface Config {
 	baseUrl: string;
 	timeoutMs: number;
 	allowedOrigins: '*' | string[];
+	coverBaseUrl: string;
+	coverSize: string;
 }
 
 const DEFAULT_BASE_URL = 'https://www.mgeko.cc';
 const DEFAULT_TIMEOUT_MS = 8000;
+/**
+ * Upstream's image proxy. Covers are not served from the site origin — see
+ * lib/covers.ts for why resolving them against `baseUrl` loses some of them.
+ */
+const DEFAULT_COVER_BASE_URL = 'https://imgsrv5.com';
+/** Only upstream's own presets exist; 288x412 and 157x211 are verified, others 404. */
+const DEFAULT_COVER_SIZE = '288x412';
 
 /**
  * The vars this module reads.
@@ -27,6 +36,8 @@ export interface ConfigVars {
 	UPSTREAM_BASE_URL?: string;
 	UPSTREAM_TIMEOUT_MS?: string;
 	ALLOWED_ORIGINS?: string;
+	COVER_BASE_URL?: string;
+	COVER_SIZE?: string;
 }
 
 export function readConfig(env: ConfigVars): Config {
@@ -44,7 +55,12 @@ export function readConfig(env: ConfigVars): Config {
 					.map((origin) => origin.trim())
 					.filter(Boolean);
 
-	return { baseUrl, timeoutMs, allowedOrigins };
+	// Unlike the others, an explicitly empty COVER_BASE_URL is meaningful: it turns
+	// the proxy rewrite off and leaves covers pointing at the upstream origin.
+	const coverBaseUrl = (env.COVER_BASE_URL ?? DEFAULT_COVER_BASE_URL).trim().replace(/\/+$/, '');
+	const coverSize = (env.COVER_SIZE ?? '').trim() || DEFAULT_COVER_SIZE;
+
+	return { baseUrl, timeoutMs, allowedOrigins, coverBaseUrl, coverSize };
 }
 
 /**

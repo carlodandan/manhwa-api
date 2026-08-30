@@ -34,7 +34,21 @@
 		// Milliseconds before an upstream request is aborted.
 		"UPSTREAM_TIMEOUT_MS": "8000",
 		// Comma-separated allowlist of browser Origins, or "*" for any.
-		"ALLOWED_ORIGINS": "https://panelrift.pages.dev"
+		"ALLOWED_ORIGINS": "https://panelrift.pages.dev",
+		/**
+		 * Image proxy every cover URL is rewritten onto. Covers are NOT served from
+		 * UPSTREAM_BASE_URL — the origin is missing some of the files it stores, so
+		 * resolving covers against it leaves a scattering of series with a broken
+		 * image. Upstream's own pages build this same URL client-side.
+		 *
+		 * Set to "" to disable the rewrite and point covers back at the origin.
+		 */
+		"COVER_BASE_URL": "https://imgsrv5.com",
+		/**
+		 * Size segment in the proxy path. Only the presets upstream itself requests
+		 * exist: "288x412" and "157x211" are verified, anything else returns 404.
+		 */
+		"COVER_SIZE": "288x412"
 	},
 
 	/**

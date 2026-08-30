@@ -74,6 +74,29 @@ series has no title, or a chapter no images, the parser fails with `502 parse_er
 instead of returning a hollow `200`. That turns an upstream markup change into a loud
 error rather than silently empty results.
 
+### Cover images
+
+`cover_url` is not an upstream-origin URL. Upstream serves covers through an image
+proxy, and its own pages never link the origin — they build
+`https://imgsrv5.com/avatar/288x412{path}` client-side. That is not cosmetic: the
+origin is missing a portion of the files it stores, so resolving covers against
+`UPSTREAM_BASE_URL` leaves a scattering of series with a `404` where the artwork
+should be. The proxy has all of them, and returns a resized image — tens of
+kilobytes against roughly a megabyte for the original.
+
+So every `cover_url` is normalised onto `COVER_BASE_URL` at the configured size,
+whichever endpoint it came from and whether upstream gave a bare path (`/v1/home`,
+which reads a JSON API) or an already-absolute proxy URL (`/v1/search` and
+`/v1/manhwa/{slug}`, which scrape HTML). One canonical URL per cover across all
+three keeps client caches warm.
+
+Two things to know. `COVER_SIZE` is not free-form — only the presets upstream
+requests exist, `288x412` and `157x211` verified, everything else `404`. And
+upstream's shared `default-placeholder` image resolves to `null` rather than being
+passed through, so a series with no artwork gets the client's own empty state
+instead of upstream's grey box. Only `/media/` paths are rewritten; a cover hosted
+somewhere else is returned untouched.
+
 ### Errors
 
 Every non-2xx response uses one envelope:
@@ -157,6 +180,8 @@ the defaults below.
 | `UPSTREAM_BASE_URL` | `https://www.mgeko.cc` | Origin to scrape. Trailing slashes are stripped. |
 | `UPSTREAM_TIMEOUT_MS` | `8000` | Per-request upstream timeout. Non-numeric values are ignored. |
 | `ALLOWED_ORIGINS` | *(none)* | Comma-separated origin allowlist, or `*` for any. |
+| `COVER_BASE_URL` | `https://imgsrv5.com` | Image proxy cover URLs are rewritten onto. `""` disables the rewrite. |
+| `COVER_SIZE` | `288x412` | Size segment in the proxy path. Only upstream's presets exist. |
 
 `ALLOWED_ORIGINS` allows nothing when unset, so dropping the var fails closed instead
 of quietly opening the API to every site. Matching is exact — neither a case-shifted
@@ -240,7 +265,7 @@ and selectors survive attribute reordering and whitespace changes that break reg
 ## Tests
 
 ```bash
-npm test          # 61 tests
+npm test          # 81 tests
 npm run typecheck
 npm run check     # both
 ```

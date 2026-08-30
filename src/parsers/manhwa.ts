@@ -1,6 +1,8 @@
 // src/parsers/manhwa.ts
 
-import { absoluteUrl, cleanText, lastPathSegment, toInteger, toNumber } from '../lib/html';
+import type { CoverConfig } from '../lib/covers';
+import { resolveCoverUrl } from '../lib/covers';
+import { cleanText, lastPathSegment, toInteger, toNumber } from '../lib/html';
 import type { Manhwa } from '../types';
 import { TextBuffer, attr, htmlResponse, runRewriter } from './support';
 import { parseChapterList } from './chapterList';
@@ -23,7 +25,7 @@ interface StatDraft {
 export async function parseManhwa(
 	response: Response,
 	slug: string,
-	baseUrl: string,
+	config: CoverConfig,
 ): Promise<Omit<Manhwa, 'chapters' | 'chapters_truncated'>> {
 	const title = new TextBuffer();
 	const altTitle = new TextBuffer();
@@ -165,7 +167,7 @@ export async function parseManhwa(
 		alternative_title: cleanText(altTitle.raw) || null,
 		author: cleanText(author.raw) || null,
 		status,
-		cover_url: absoluteUrl(cover, baseUrl),
+		cover_url: resolveCoverUrl(cover, config),
 		description: cleanText(description.raw).replace(/^the summary is\s*/i, '') || null,
 		genres,
 		rating,
@@ -183,17 +185,17 @@ export async function parseManhwa(
  * The body is tee'd because HTMLRewriter consumes it and the two parsers need
  * different handler sets.
  */
-export async function parseManhwaPage(response: Response, slug: string, baseUrl: string): Promise<Manhwa> {
+export async function parseManhwaPage(response: Response, slug: string, config: CoverConfig): Promise<Manhwa> {
 	const body = response.body;
 	if (!body) {
-		const details = await parseManhwa(response, slug, baseUrl);
+		const details = await parseManhwa(response, slug, config);
 		return { ...details, chapters: [], chapters_truncated: true };
 	}
 
 	const [forDetails, forChapters] = body.tee();
 	const headers = response.headers;
 	const [details, chapters] = await Promise.all([
-		parseManhwa(new Response(forDetails, { headers }), slug, baseUrl),
+		parseManhwa(new Response(forDetails, { headers }), slug, config),
 		parseChapterList(new Response(forChapters, { headers })),
 	]);
 
@@ -201,8 +203,8 @@ export async function parseManhwaPage(response: Response, slug: string, baseUrl:
 }
 
 /** Parse a fixture string. Test convenience wrapper. */
-export function parseManhwaHtml(html: string, slug: string, baseUrl: string): Promise<Manhwa> {
-	return parseManhwaPage(htmlResponse(html), slug, baseUrl);
+export function parseManhwaHtml(html: string, slug: string, config: CoverConfig): Promise<Manhwa> {
+	return parseManhwaPage(htmlResponse(html), slug, config);
 }
 
 export { lastPathSegment };

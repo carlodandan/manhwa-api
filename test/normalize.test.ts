@@ -3,40 +3,48 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeRanking } from '../src/handlers/home';
 import { readConfig } from '../src/lib/env';
+import { resolveCoverUrl } from '../src/lib/covers';
 import { absoluteUrl, cleanText, decodeEntities, toInteger, toNumber } from '../src/lib/html';
 import { parsePagination, parseSearchTerm, parseSlug, parseChapterId } from '../src/lib/validate';
 import { cacheKeyFor } from '../src/lib/cache';
 
 const BASE = 'https://upstream.example.test';
+const CONFIG = readConfig({ UPSTREAM_BASE_URL: BASE });
+const PROXIED = 'https://imgsrv5.com/avatar/288x412';
 
 describe('normalizeRanking', () => {
 	it('reads the list from the "manga" key upstream actually uses', () => {
-		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1', cover_url: '/media/a.png' }], period: '1d' }, '1d', BASE);
+		const result = normalizeRanking(
+			{ manga: [{ name: 'Alpha', slug: 'alpha-x1', cover_url: '/media/a.png' }], period: '1d' },
+			'1d',
+			CONFIG,
+		);
 		expect(result.period).toBe('1d');
 		expect(result.manhwa).toHaveLength(1);
 		expect(result.manhwa[0]?.title).toBe('Alpha');
 	});
 
-	it('resolves relative cover URLs', () => {
-		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1', cover_url: '/media/a.png' }] }, '1d', BASE);
-		// Regression: this branch keyed off "manhwa" and never ran, so clients
-		// received a bare path instead of a URL.
-		expect(result.manhwa[0]?.cover_url).toBe(`${BASE}/media/a.png`);
+	it('sends the bare cover paths this endpoint returns through the image proxy', () => {
+		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1', cover_url: '/media/a.png' }] }, '1d', CONFIG);
+		// Two regressions in one line. The branch used to key off "manhwa" and never
+		// ran, so clients received a bare path; then it resolved against the site
+		// origin, which does not serve every stored cover and 404'd for some series.
+		expect(result.manhwa[0]?.cover_url).toBe(`${PROXIED}/media/a.png`);
 	});
 
 	it('still accepts a "manhwa" key if upstream ever renames it back', () => {
-		const result = normalizeRanking({ manhwa: [{ name: 'Beta', slug: 'beta-x2' }] }, '1w', BASE);
+		const result = normalizeRanking({ manhwa: [{ name: 'Beta', slug: 'beta-x2' }] }, '1w', CONFIG);
 		expect(result.manhwa[0]?.slug).toBe('beta-x2');
 	});
 
 	it('yields null covers instead of fabricating a URL', () => {
-		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1' }] }, '1d', BASE);
+		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1' }] }, '1d', CONFIG);
 		// The old absoluteUrl(undefined) produced "<base>/undefined".
 		expect(result.manhwa[0]?.cover_url).toBeNull();
 	});
 
 	it('drops entries missing a title or slug', () => {
-		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1' }, { name: 'No slug' }, {}, null] }, '1d', BASE);
+		const result = normalizeRanking({ manga: [{ name: 'Alpha', slug: 'alpha-x1' }, { name: 'No slug' }, {}, null] }, '1d', CONFIG);
 		expect(result.manhwa).toHaveLength(1);
 	});
 
@@ -49,14 +57,53 @@ describe('normalizeRanking', () => {
 				],
 			},
 			'1d',
-			BASE,
+			CONFIG,
 		);
 		expect(result.manhwa[0]?.rating).toBe(8.4);
 		expect(result.manhwa[1]?.rating).toBeNull();
 	});
 
 	it('throws a 502 when the payload is not shaped like a ranking', () => {
-		expect(() => normalizeRanking({ manga: 'nope' as unknown }, '1d', BASE)).toThrowError(/markup may have changed|ranking list/);
+		expect(() => normalizeRanking({ manga: 'nope' as unknown }, '1d', CONFIG)).toThrowError(/markup may have changed|ranking list/);
+	});
+});
+
+describe('resolveCoverUrl', () => {
+	it('prefixes a bare storage path with the proxy and size', () => {
+		expect(resolveCoverUrl('/media/manga_covers/x.jpg', CONFIG)).toBe(`${PROXIED}/media/manga_covers/x.jpg`);
+	});
+
+	it('rewrites an absolute proxy URL onto the configured size', () => {
+		// Listings and detail pages hand us 288x412 already, but upstream also emits
+		// 157x211 for its own thumbnails. Normalising both means one canonical URL
+		// per cover across every endpoint, which keeps client caches warm.
+		expect(resolveCoverUrl('https://imgsrv5.com/avatar/157x211/media/manga_covers/x.jpg', CONFIG)).toBe(
+			`${PROXIED}/media/manga_covers/x.jpg`,
+		);
+	});
+
+	it('treats the shared placeholder as no cover', () => {
+		expect(resolveCoverUrl('https://imgsrv5.com/avatar/288x412/media/manga_covers/default-placeholder.png', CONFIG)).toBeNull();
+		expect(resolveCoverUrl('/media/manga_covers/default-placeholder.webp', CONFIG)).toBeNull();
+	});
+
+	it('leaves a URL alone when it is not an upstream media path', () => {
+		expect(resolveCoverUrl('https://other.test/covers/x.jpg', CONFIG)).toBe('https://other.test/covers/x.jpg');
+	});
+
+	it('returns null for absent or unparseable input', () => {
+		expect(resolveCoverUrl(null, CONFIG)).toBeNull();
+		expect(resolveCoverUrl('  ', CONFIG)).toBeNull();
+	});
+
+	it('falls back to the origin when the proxy is switched off', () => {
+		const direct = readConfig({ UPSTREAM_BASE_URL: BASE, COVER_BASE_URL: '' });
+		expect(resolveCoverUrl('/media/manga_covers/x.jpg', direct)).toBe(`${BASE}/media/manga_covers/x.jpg`);
+	});
+
+	it('honours an overridden proxy and size', () => {
+		const custom = readConfig({ UPSTREAM_BASE_URL: BASE, COVER_BASE_URL: 'https://images.test/', COVER_SIZE: '157x211' });
+		expect(resolveCoverUrl('/media/manga_covers/x.jpg', custom)).toBe('https://images.test/avatar/157x211/media/manga_covers/x.jpg');
 	});
 });
 
@@ -152,6 +199,8 @@ describe('readConfig', () => {
 		// Deny by default: an absent ALLOWED_ORIGINS must not silently open the API
 		// to every site, so it resolves to an empty allowlist rather than "*".
 		expect(config.allowedOrigins).toEqual([]);
+		expect(config.coverBaseUrl).toBe('https://imgsrv5.com');
+		expect(config.coverSize).toBe('288x412');
 	});
 
 	it('opens up to any origin only when asked explicitly', () => {

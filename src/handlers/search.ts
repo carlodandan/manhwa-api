@@ -14,5 +14,5 @@ export async function searchManhwa(term: string, config: Config, limiter?: RateL
 
 	// An empty result set is a valid answer here, so no parse-error guard: a term
 	// that genuinely matches nothing must not look like a scraper failure.
-	return parseSearch(response, config.baseUrl);
+	return parseSearch(response, config);
 }

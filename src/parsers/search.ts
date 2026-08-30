@@ -1,6 +1,8 @@
 // src/parsers/search.ts
 
-import { absoluteUrl, cleanText, lastPathSegment, toNumber } from '../lib/html';
+import type { CoverConfig } from '../lib/covers';
+import { resolveCoverUrl } from '../lib/covers';
+import { cleanText, lastPathSegment, toNumber } from '../lib/html';
 import type { ManhwaSummary } from '../types';
 import { TextBuffer, attr, htmlResponse, runRewriter } from './support';
 
@@ -26,7 +28,7 @@ function newDraft(): Draft {
 	};
 }
 
-function finish(draft: Draft, baseUrl: string): ManhwaSummary | null {
+function finish(draft: Draft, config: CoverConfig): ManhwaSummary | null {
 	const title = draft.titleAttr ?? cleanText(draft.title.raw);
 	if (!title || !draft.slug) return null;
 
@@ -36,7 +38,7 @@ function finish(draft: Draft, baseUrl: string): ManhwaSummary | null {
 	return {
 		title,
 		slug: draft.slug,
-		cover_url: absoluteUrl(draft.cover, baseUrl),
+		cover_url: resolveCoverUrl(draft.cover, config),
 		latest_chapter: cleanText(draft.latestChapter.raw) || null,
 		last_updated: updated || null,
 		rating: toNumber(ratingText),
@@ -51,7 +53,7 @@ function finish(draft: Draft, baseUrl: string): ManhwaSummary | null {
  * values distinguished only by position and inline style, so the element handler
  * classifies each span before its text arrives.
  */
-export async function parseSearch(response: Response, baseUrl: string): Promise<ManhwaSummary[]> {
+export async function parseSearch(response: Response, config: CoverConfig): Promise<ManhwaSummary[]> {
 	const results: ManhwaSummary[] = [];
 	let draft: Draft | null = null;
 	let statSpan: 'updated' | 'rating' | 'other' = 'other';
@@ -60,13 +62,13 @@ export async function parseSearch(response: Response, baseUrl: string): Promise<
 		.on('li.novel-item', {
 			element(element) {
 				if (draft) {
-					const done = finish(draft, baseUrl);
+					const done = finish(draft, config);
 					if (done) results.push(done);
 				}
 				draft = newDraft();
 				element.onEndTag(() => {
 					if (draft) {
-						const done = finish(draft, baseUrl);
+						const done = finish(draft, config);
 						if (done) results.push(done);
 					}
 					draft = null;
@@ -116,7 +118,7 @@ export async function parseSearch(response: Response, baseUrl: string): Promise<
 
 	// Flush a trailing item if the document ended without a closing tag.
 	if (draft) {
-		const done = finish(draft, baseUrl);
+		const done = finish(draft, config);
 		if (done) results.push(done);
 	}
 
@@ -124,6 +126,6 @@ export async function parseSearch(response: Response, baseUrl: string): Promise<
 }
 
 /** Parse a fixture string. Test convenience wrapper. */
-export function parseSearchHtml(html: string, baseUrl: string): Promise<ManhwaSummary[]> {
-	return parseSearch(htmlResponse(html), baseUrl);
+export function parseSearchHtml(html: string, config: CoverConfig): Promise<ManhwaSummary[]> {
+	return parseSearch(htmlResponse(html), config);
 }

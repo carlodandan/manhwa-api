@@ -28,7 +28,7 @@ export async function fetchManhwa(slug: string, config: Config, limiter?: RateLi
 		limiter,
 	});
 
-	const manhwa = await parseManhwaPage(response, slug, config.baseUrl);
+	const manhwa = await parseManhwaPage(response, slug, config);
 
 	// A detail page without a title means the markup changed; better to surface a
 	// 502 than to hand the client a record full of nulls with a 200.

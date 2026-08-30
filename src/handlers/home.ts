@@ -1,7 +1,9 @@
 // src/handlers/home.ts
 
 import type { Config, RateLimitBinding } from '../lib/env';
-import { absoluteUrl, cleanText, toNumber } from '../lib/html';
+import type { CoverConfig } from '../lib/covers';
+import { resolveCoverUrl } from '../lib/covers';
+import { cleanText, toNumber } from '../lib/html';
 import { fetchUpstreamJson } from '../lib/upstream';
 import type { RankingPeriodKey } from '../lib/validate';
 import { RANKING_PERIODS } from '../lib/validate';
@@ -12,8 +14,12 @@ import type { Home, ManhwaSummary, RankingPeriod } from '../types';
  * Upstream ranking payload.
  *
  * The list key is `manga`, not `manhwa`. The previous code checked for `manhwa`,
- * so the branch that resolves relative cover URLs never ran and every cover came
- * back as a path like "/media/manga_covers/x.png".
+ * so the branch that resolved cover URLs never ran and every cover came back as a
+ * path like "/media/manga_covers/x.png".
+ *
+ * `cover_url` is still only that path even now the branch runs — this endpoint is
+ * the one place covers arrive as bare storage paths rather than absolute URLs, and
+ * the origin does not serve all of them. resolveCoverUrl is what fixes that.
  */
 interface UpstreamRanking {
 	manga?: unknown;
@@ -33,7 +39,7 @@ interface UpstreamItem {
 
 const str = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? cleanText(value) : null);
 
-function toSummary(raw: UpstreamItem, baseUrl: string): ManhwaSummary | null {
+function toSummary(raw: UpstreamItem, config: CoverConfig): ManhwaSummary | null {
 	const title = str(raw.name) ?? str(raw.title);
 	const slug = str(raw.slug);
 	if (!title || !slug) return null;
@@ -41,7 +47,7 @@ function toSummary(raw: UpstreamItem, baseUrl: string): ManhwaSummary | null {
 	return {
 		title,
 		slug,
-		cover_url: absoluteUrl(typeof raw.cover_url === 'string' ? raw.cover_url : null, baseUrl),
+		cover_url: resolveCoverUrl(typeof raw.cover_url === 'string' ? raw.cover_url : null, config),
 		latest_chapter: str(raw.latest_chapter),
 		last_updated: str(raw.last_updated),
 		rating: typeof raw.rating === 'number' ? raw.rating : toNumber(str(raw.rating)),
@@ -54,15 +60,13 @@ function toSummary(raw: UpstreamItem, baseUrl: string): ManhwaSummary | null {
  * Pure and exported so the list-key and cover-URL handling can be tested without
  * any network access.
  */
-export function normalizeRanking(payload: UpstreamRanking, period: string, baseUrl: string): RankingPeriod {
+export function normalizeRanking(payload: UpstreamRanking, period: string, config: CoverConfig): RankingPeriod {
 	const list = payload.manga ?? payload.manhwa;
 	if (!Array.isArray(list)) {
 		throw parseError(`the '${period}' ranking list`, 'expected an array under "manga"');
 	}
 
-	const manhwa = list
-		.map((item) => toSummary((item ?? {}) as UpstreamItem, baseUrl))
-		.filter((item): item is ManhwaSummary => item !== null);
+	const manhwa = list.map((item) => toSummary((item ?? {}) as UpstreamItem, config)).filter((item): item is ManhwaSummary => item !== null);
 
 	return { period: str(payload.period) ?? period, manhwa };
 }
@@ -75,7 +79,7 @@ export async function fetchRanking(period: RankingPeriodKey, config: Config, lim
 		limiter,
 	});
 
-	return normalizeRanking(payload, period, config.baseUrl);
+	return normalizeRanking(payload, period, config);
 }
 
 /**
