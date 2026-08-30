@@ -2,12 +2,12 @@
 
 import { Hono } from 'hono';
 import { POLICIES } from './lib/cache';
-import type { AppEnv } from './lib/env';
+import { readConfig, type AppEnv } from './lib/env';
 import { fetchChapter } from './handlers/chapter';
 import { fetchHome, fetchRanking } from './handlers/home';
 import { fetchChapterList, fetchManhwa } from './handlers/manhwa';
 import { searchManhwa } from './handlers/search';
-import { errorHandler, jsonWithCache, withConfig, withCors, withEdgeCache, withRateLimit } from './middleware';
+import { allowOriginFor, errorHandler, jsonWithCache, withConfig, withCors, withEdgeCache, withRateLimit } from './middleware';
 import { parseChapterId, parsePagination, parsePeriod, parseSearchTerm, parseSlug } from './lib/validate';
 
 const app = new Hono<AppEnv>();
@@ -156,12 +156,16 @@ export default {
 		}
 
 		if (request.method !== 'GET' && request.method !== 'OPTIONS') {
+			// This path answers before Hono runs, so it applies the allowlist itself
+			// instead of inheriting it from `withCors`.
+			const allowOrigin = allowOriginFor(request.headers.get('Origin'), readConfig(env).allowedOrigins);
 			return new Response(JSON.stringify({ error: { code: 'method_not_allowed', message: 'Only GET is supported' } }), {
 				status: 405,
 				headers: {
 					'Content-Type': 'application/json; charset=utf-8',
 					Allow: 'GET, HEAD, OPTIONS',
-					'Access-Control-Allow-Origin': '*',
+					...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
+					Vary: 'Origin',
 				},
 			});
 		}

@@ -3,7 +3,7 @@
 import type { Context, ErrorHandler, MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cacheControl, cacheKeyFor, cacheLookup, cacheStore, POLICIES, weakETag, type Deferrable } from './lib/cache';
-import { readConfig, type AppEnv, type RateLimitBinding } from './lib/env';
+import { readConfig, type AppEnv, type Config, type RateLimitBinding } from './lib/env';
 import { ApiError, tooManyRequests } from './lib/errors';
 import type { ApiErrorBody } from './types';
 
@@ -13,6 +13,21 @@ export const withConfig: MiddlewareHandler<AppEnv> = async (c, next) => {
 	c.set('requestId', c.req.header('cf-ray') ?? crypto.randomUUID());
 	await next();
 };
+
+/**
+ * Resolve the `Access-Control-Allow-Origin` value for a request, or `undefined`
+ * when this Origin is not on the allowlist and no header should be sent.
+ *
+ * Matching is exact, so neither `https://site.example.evil.test` nor a
+ * case-shifted spelling of an allowed host is accepted.
+ *
+ * Exported because the 405 short-circuit in `index.ts` answers before Hono runs
+ * and has to reach the same verdict.
+ */
+export function allowOriginFor(origin: string | null | undefined, allowedOrigins: Config['allowedOrigins']): string | undefined {
+	if (allowedOrigins === '*') return '*';
+	return origin && allowedOrigins.includes(origin) ? origin : undefined;
+}
 
 /**
  * CORS and security headers.
@@ -25,13 +40,14 @@ export const withConfig: MiddlewareHandler<AppEnv> = async (c, next) => {
  */
 function applyStandardHeaders(c: Context<AppEnv>): void {
 	const { allowedOrigins } = c.get('config') ?? readConfig(c.env);
-	const origin = c.req.header('Origin');
+	const allowOrigin = allowOriginFor(c.req.header('Origin'), allowedOrigins);
 
-	if (allowedOrigins === '*') {
-		c.header('Access-Control-Allow-Origin', '*');
-	} else if (origin && allowedOrigins.includes(origin)) {
-		c.header('Access-Control-Allow-Origin', origin);
-		// Responses now differ by Origin, so caches must key on it.
+	if (allowOrigin) c.header('Access-Control-Allow-Origin', allowOrigin);
+	if (allowedOrigins !== '*') {
+		// The header above depends on the request Origin, so any shared cache has to
+		// key on it. Set this even when the Origin is refused: responses here carry
+		// `Cache-Control: public`, and without Vary a cache can hand an allowed
+		// visitor the header-less copy stored for some other site (or vice versa).
 		c.header('Vary', 'Origin');
 	}
 
