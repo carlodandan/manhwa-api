@@ -4,7 +4,7 @@
 interface __BaseEnv_Env {
 	UPSTREAM_BASE_URL: "https://www.mgeko.cc";
 	UPSTREAM_TIMEOUT_MS: "8000";
-	ALLOWED_ORIGINS: "*";
+	ALLOWED_ORIGINS: "https://panelrift.pages.dev";
 	READ_LIMITER: RateLimit;
 	SEARCH_LIMITER: RateLimit;
 	UPSTREAM_LIMITER: RateLimit;
