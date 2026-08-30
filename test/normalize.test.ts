@@ -93,6 +93,20 @@ describe('normalizeBrowse', () => {
 		expect(list.total_pages).toBeNull();
 	});
 
+	it('relabels the badge to "New" and leaves a card without one alone', async () => {
+		// Upstream stamps "Trending" on every card, page 150 included, so its wording
+		// says nothing. Presence stays upstream's call; the label is ours.
+		const badged = `
+			<article class="comic-card">
+				<div class="comic-card__cover">
+					<span class="comic-card__badge comic-card__badge--trending">Trending</span>
+					<a href="/manga/alpha-x1/"><img src="/media/a.png" alt="Alpha"></a>
+				</div>
+			</article>`;
+		const list = await normalizeBrowse({ results_html: badged + CARD, num_pages: 1 }, 1, CONFIG);
+		expect(list.results.map((entry) => entry.badge)).toEqual(['New', null]);
+	});
+
 	it('throws a 502 when the payload carries no results_html at all', async () => {
 		await expect(normalizeBrowse({ total_results: 10, num_pages: 1 }, 1, CONFIG)).rejects.toThrowError(/markup may have changed/);
 	});

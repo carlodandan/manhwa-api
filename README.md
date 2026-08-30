@@ -94,16 +94,19 @@ chapters or update times — so rather than shipping two fields that are permane
       "description": "Upstream's own teaser, truncated by upstream with a trailing …",
       "rating": 4.9,
       "views": 117815,
-      "badge": "Trending"
+      "badge": "New"
     }
   ]
 }
 ```
 
 `description` is a truncated teaser, not the full text — read that from
-`/v1/manhwa/{slug}`. `page` echoes what upstream served rather than what was asked for:
-upstream clamps a page past the end to the last one, so `?page=400` of 291 comes back as
-`"page": 291` with the final page's results.
+`/v1/manhwa/{slug}`. `badge` is `"New"` rather than upstream's own wording: its card
+template stamps "Trending" on every entry, including the months-old ones on page 150, so
+the text carries nothing. Whether a badge is shown at all is still upstream's call, and
+`null` means it showed none. `page` echoes what upstream served rather than what was
+asked for: upstream clamps a page past the end to the last one, so `?page=400` of 291
+comes back as `"page": 291` with the final page's results.
 
 Missing values are `null` rather than omitted or faked — an absent cover is `null`, not
 a URL pointing at nothing. Fields the endpoint exists to deliver are the exception: if a
@@ -304,7 +307,7 @@ and selectors survive attribute reordering and whitespace changes that break reg
 ## Tests
 
 ```bash
-npm test          # 99 tests
+npm test          # 100 tests
 npm run typecheck
 npm run check     # both
 ```

@@ -11,6 +11,18 @@ import type { BrowseList } from '../types';
 export const RECENTLY_ADDED = 'recently_added';
 
 /**
+ * What a badge on this listing is relabelled to.
+ *
+ * Upstream stamps every card "Trending" — all 24 on page 1, and all 24 on page
+ * 150, where the series are months old. It is boilerplate from its shared card
+ * template rather than a signal, and on a listing sorted by recency it is simply
+ * wrong. Entries that carry a badge get the label the endpoint can actually
+ * stand behind; the parser still reports upstream's own text, so a change there
+ * stays visible in the fixtures.
+ */
+const BADGE = 'New';
+
+/**
  * The browse endpoint answers with JSON, not a page: an HTML fragment of cards
  * plus the paginator's own counts. `page` is validated to a bounded integer
  * before it reaches here, so interpolating it needs no further escaping.
@@ -43,7 +55,9 @@ export async function normalizeBrowse(payload: UpstreamBrowse, page: number, con
 		throw parseError('the recently-added listing', 'no "results_html" string in the browse payload');
 	}
 
-	const results = await parseComicCardsHtml(payload.results_html, config);
+	const cards = await parseComicCardsHtml(payload.results_html, config);
+	// Presence is upstream's to decide, the wording is ours. See BADGE.
+	const results = cards.map((entry) => (entry.badge === null ? entry : { ...entry, badge: BADGE }));
 	const totalPages = int(payload.num_pages);
 
 	// Zero cards on a page upstream itself claims exists means the card markup

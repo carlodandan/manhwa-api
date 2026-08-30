@@ -38,7 +38,12 @@ export interface BrowseEntry {
 	 * display string ("4.2M"), this listing renders the raw figure.
 	 */
 	views: number | null;
-	/** Promotional label upstream stamped on the cover, e.g. "Trending". */
+	/**
+	 * Promotional label upstream stamped on the cover, normalised per listing.
+	 * `/v1/recently_added` reports "New": upstream's own card template says
+	 * "Trending" on every entry, months-old ones included, so its wording carries
+	 * nothing. Null when upstream showed no badge at all.
+	 */
 	badge: string | null;
 }
 

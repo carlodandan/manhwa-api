@@ -108,6 +108,8 @@ describe('parseComicCards', () => {
 
 	it('keeps the badge and the truncated description, and nulls the empty ones', async () => {
 		const [first, second, third] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		// Upstream's own wording. `normalizeBrowse` relabels it to "New" per listing;
+		// the parser stays faithful so a change upstream shows up here first.
 		expect(first?.badge).toBe('Trending');
 		expect(first?.description?.startsWith('A quiet clerk')).toBe(true);
 		// Entities decoded and the CRLFs upstream leaves mid-description collapsed.
