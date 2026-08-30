@@ -2,11 +2,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { parseSearchHtml } from '../src/parsers/search';
+import { parseComicCardsHtml } from '../src/parsers/browse';
 import { parseManhwaHtml } from '../src/parsers/manhwa';
 import { parseChapterListHtml, numberFromId } from '../src/parsers/chapterList';
 import { parseChapterHtml } from '../src/parsers/chapter';
 import { readConfig } from '../src/lib/env';
 import { SEARCH_HTML } from './fixtures/search';
+import { RECENTLY_ADDED_HTML } from './fixtures/recentlyAdded';
 import { MANHWA_DETAIL_HTML } from './fixtures/manhwaDetail';
 import { ALL_CHAPTERS_HTML } from './fixtures/allChapters';
 import { READER_HTML, READER_HTML_NO_IMAGES } from './fixtures/reader';
@@ -55,6 +57,75 @@ describe('parseSearch', () => {
 
 	it('returns an empty list for markup with no results', async () => {
 		expect(await parseSearchHtml('<ul class="novel-list"></ul>', CONFIG)).toEqual([]);
+	});
+});
+
+describe('parseComicCards', () => {
+	it('extracts every well-formed card and skips the one with no anchor', async () => {
+		const results = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		expect(results).toHaveLength(3);
+		expect(results.map((entry) => entry.slug)).toEqual(['alpha-tale-x1', 'beta-journey-x2', 'gamma-void-x3']);
+	});
+
+	it('takes the full title from the img alt rather than the ellipsised heading', async () => {
+		const [first] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		// The <h3> is truncated upstream at a fixed width; only `alt` is whole.
+		expect(first?.title).toBe("Alpha & Omega's Tale: A Very Long Subtitle That Upstream Keeps Whole");
+		expect(first?.title).not.toContain('…');
+	});
+
+	it('falls back to the heading when the img carries no alt', async () => {
+		const html = RECENTLY_ADDED_HTML.replace(/alt="Beta Journey"/, 'alt=""');
+		const results = await parseComicCardsHtml(html, CONFIG);
+		expect(results.find((entry) => entry.slug === 'beta-journey-x2')?.title).toBe('Beta Journey');
+	});
+
+	it('normalises covers onto the configured proxy size', async () => {
+		const [first, second] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		// Upstream serves this grid at 157x211; one canonical URL per cover across
+		// every endpoint is what keeps client caches warm.
+		expect(first?.cover_url).toBe(`${PROXIED}/alpha.png`);
+		expect(second?.cover_url).toBe(`${PROXIED}/beta.png`);
+	});
+
+	it('reports no cover for the shared placeholder', async () => {
+		const [, , third] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		expect(third?.cover_url).toBeNull();
+	});
+
+	it('reads the exact view count out of the stats block', async () => {
+		const [first, second] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		// Three spans hold one figure per sort mode; all-time wins.
+		expect(first?.views).toBe(116557);
+		expect(second?.views).toBe(1024);
+	});
+
+	it('strips the star off the rating and yields null when the span is absent', async () => {
+		const [first, second] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		expect(first?.rating).toBe(4.9);
+		expect(second?.rating).toBeNull();
+	});
+
+	it('keeps the badge and the truncated description, and nulls the empty ones', async () => {
+		const [first, second, third] = await parseComicCardsHtml(RECENTLY_ADDED_HTML, CONFIG);
+		expect(first?.badge).toBe('Trending');
+		expect(first?.description?.startsWith('A quiet clerk')).toBe(true);
+		// Entities decoded and the CRLFs upstream leaves mid-description collapsed.
+		expect(first?.description).toContain("isn't");
+		expect(first?.description).not.toContain('\n');
+		expect(second?.badge).toBeNull();
+		expect(third?.description).toBeNull();
+		expect(third?.views).toBeNull();
+	});
+
+	it('returns an empty list for a fragment with no cards', async () => {
+		expect(await parseComicCardsHtml('<div class="comic-grid"></div>', CONFIG)).toEqual([]);
+	});
+
+	it('still yields the earlier cards when an article is left unclosed', async () => {
+		// Regression guard for the flush-on-next-start-tag path.
+		const html = RECENTLY_ADDED_HTML.replace('</article>', '');
+		expect((await parseComicCardsHtml(html, CONFIG)).length).toBeGreaterThanOrEqual(3);
 	});
 });
 

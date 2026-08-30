@@ -2,10 +2,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { normalizeRanking } from '../src/handlers/home';
+import { normalizeBrowse } from '../src/handlers/browse';
 import { readConfig } from '../src/lib/env';
 import { resolveCoverUrl } from '../src/lib/covers';
 import { absoluteUrl, cleanText, decodeEntities, toInteger, toNumber } from '../src/lib/html';
-import { parsePagination, parseSearchTerm, parseSlug, parseChapterId } from '../src/lib/validate';
+import { parsePageNumber, parsePagination, parseSearchTerm, parseSlug, parseChapterId, MAX_PAGE } from '../src/lib/validate';
 import { cacheKeyFor } from '../src/lib/cache';
 
 const BASE = 'https://upstream.example.test';
@@ -65,6 +66,49 @@ describe('normalizeRanking', () => {
 
 	it('throws a 502 when the payload is not shaped like a ranking', () => {
 		expect(() => normalizeRanking({ manga: 'nope' as unknown }, '1d', CONFIG)).toThrowError(/markup may have changed|ranking list/);
+	});
+});
+
+describe('normalizeBrowse', () => {
+	const CARD = `
+		<article class="comic-card">
+			<div class="comic-card__cover"><a href="/manga/alpha-x1/"><img src="/media/a.png" alt="Alpha"></a></div>
+			<div class="comic-card__content"><h3 class="comic-card__title"><a href="/manga/alpha-x1/">Alpha</a></h3></div>
+		</article>`;
+
+	it('passes the paginator counts through and reports the page size it got', async () => {
+		const list = await normalizeBrowse({ results_html: CARD, total_results: 6961, page: 1, num_pages: 291 }, 1, CONFIG);
+		expect(list).toMatchObject({ sort: 'recently_added', page: 1, count: 1, total: 6961, total_pages: 291 });
+		expect(list.results[0]?.cover_url).toBe(`${PROXIED}/media/a.png`);
+	});
+
+	it('trusts the page upstream says it served over the one that was asked for', async () => {
+		const list = await normalizeBrowse({ results_html: CARD, page: 291, num_pages: 291 }, 999, CONFIG);
+		expect(list.page).toBe(291);
+	});
+
+	it('nulls the counts rather than guessing when upstream omits them', async () => {
+		const list = await normalizeBrowse({ results_html: CARD }, 1, CONFIG);
+		expect(list.total).toBeNull();
+		expect(list.total_pages).toBeNull();
+	});
+
+	it('throws a 502 when the payload carries no results_html at all', async () => {
+		await expect(normalizeBrowse({ total_results: 10, num_pages: 1 }, 1, CONFIG)).rejects.toThrowError(/markup may have changed/);
+	});
+
+	it('throws a 502 when a page upstream claims exists yields no cards', async () => {
+		// Cards present but unrecognised is exactly what an upstream markup change
+		// looks like, and it must not come back as an empty 200.
+		await expect(normalizeBrowse({ results_html: '<div class="not-a-card"></div>', num_pages: 291 }, 2, CONFIG)).rejects.toThrowError(
+			/markup may have changed/,
+		);
+	});
+
+	it('accepts an empty page past the end of the listing', async () => {
+		const list = await normalizeBrowse({ results_html: '\n\n', total_results: 6961, page: 400, num_pages: 291 }, 400, CONFIG);
+		expect(list.count).toBe(0);
+		expect(list.results).toEqual([]);
 	});
 });
 
@@ -174,6 +218,17 @@ describe('validation', () => {
 	it('rejects non-numeric pagination', () => {
 		expect(() => parsePagination(new URL('https://api.test/x?page=0'))).toThrowError();
 		expect(() => parsePagination(new URL('https://api.test/x?page=abc'))).toThrowError();
+	});
+
+	it('defaults a listing page to 1 and bounds it', () => {
+		expect(parsePageNumber(null)).toBe(1);
+		expect(parsePageNumber('7')).toBe(7);
+		expect(parsePageNumber(String(MAX_PAGE))).toBe(MAX_PAGE);
+		for (const bad of ['0', '-3', 'abc', '', String(MAX_PAGE + 1)]) {
+			// An unbounded page is an unbounded supply of cache keys, one upstream
+			// fetch apiece.
+			expect(() => parsePageNumber(bad)).toThrowError(/page must be/);
+		}
 	});
 });
 

@@ -13,6 +13,47 @@ export interface ManhwaSummary {
 	rating: number | null;
 }
 
+/**
+ * One card from a browse listing, e.g. `/v1/recently_added`.
+ *
+ * Not a `ManhwaSummary`: the browse markup carries a description, an exact view
+ * count and a badge, and carries no chapter or update information at all.
+ * Faking `latest_chapter`/`last_updated` as permanent nulls would be worse than
+ * saying plainly that this shape is a different one. The four fields clients
+ * need for a cover grid — `title`, `slug`, `cover_url`, `rating` — are common to
+ * both, so one card component still covers listings and rankings alike.
+ */
+export interface BrowseEntry {
+	title: string;
+	slug: string;
+	cover_url: string | null;
+	/**
+	 * Upstream's own teaser, truncated by upstream with a trailing "…". The full
+	 * text is on `/v1/manhwa/{slug}`.
+	 */
+	description: string | null;
+	rating: number | null;
+	/**
+	 * Exact view count. Unlike `Manhwa.views`, which is upstream's abbreviated
+	 * display string ("4.2M"), this listing renders the raw figure.
+	 */
+	views: number | null;
+	/** Promotional label upstream stamped on the cover, e.g. "Trending". */
+	badge: string | null;
+}
+
+/** One page of a browse listing. Upstream fixes the page size, so `count` reports it. */
+export interface BrowseList {
+	/** Upstream's sort key, e.g. `recently_added`. */
+	sort: string;
+	page: number;
+	count: number;
+	/** Total across every page, and the page count. Null if upstream stops sending them. */
+	total: number | null;
+	total_pages: number | null;
+	results: BrowseEntry[];
+}
+
 /** One entry in a series' chapter list. */
 export interface ChapterRef {
 	/** Chapter label as shown upstream, e.g. "155" or "200-side-story-3". */

@@ -54,6 +54,8 @@ export const POLICIES = {
 	// Chapter images never change once published, so cache them hard.
 	chapter: { maxAge: 3600, sMaxAge: 86400, staleWhileRevalidate: 86400 },
 	search: { maxAge: 60, sMaxAge: 300, staleWhileRevalidate: 600 },
+	// New series land continuously, so this ages like the rankings do.
+	recentlyAdded: { maxAge: 60, sMaxAge: 300, staleWhileRevalidate: 600 },
 	/**
 	 * Negative cache for 404s. Without this a client requesting a nonexistent
 	 * slug in a loop hits upstream on every single request, forever.

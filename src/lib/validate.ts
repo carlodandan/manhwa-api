@@ -73,6 +73,33 @@ export function parsePagination(url: URL): { page: number; perPage: number } {
 	return { page, perPage };
 }
 
+/**
+ * Upper bound on `?page=`. Listings run to a few hundred pages, so this is not a
+ * limit any real client meets; it stops a caller minting unbounded cache keys,
+ * each of which costs one upstream fetch.
+ */
+export const MAX_PAGE = 10_000;
+
+/**
+ * Validate a 1-based `?page=` on a listing whose page size upstream fixes.
+ *
+ * Separate from `parsePagination` on purpose: there is no `per_page` to honour
+ * here, and rejecting one the endpoint cannot act on would only mislead.
+ */
+export function parsePageNumber(raw: string | null): number {
+	if (raw === null) return 1;
+
+	const page = Number.parseInt(raw, 10);
+	if (!Number.isFinite(page) || page < 1) {
+		throw badRequest('invalid_page', 'page must be a positive integer');
+	}
+	if (page > MAX_PAGE) {
+		throw badRequest('invalid_page', `page must be at most ${MAX_PAGE}`);
+	}
+
+	return page;
+}
+
 const RANKING_PERIODS = ['1d', '1w', '1m'] as const;
 export type RankingPeriodKey = (typeof RANKING_PERIODS)[number];
 

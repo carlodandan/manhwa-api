@@ -24,6 +24,7 @@ describe('endpoint index', () => {
 		const body = (await response.json()) as { version: string; endpoints: { path: string }[] };
 		expect(body.version).toBe('v1');
 		expect(body.endpoints.map((e) => e.path)).toContain('/v1/manhwa/{slug}');
+		expect(body.endpoints.map((e) => e.path)).toContain('/v1/recently_added');
 	});
 
 	it('answers a matching If-None-Match with 304', async () => {
@@ -61,6 +62,19 @@ describe('request validation', () => {
 	it('rejects malformed pagination', async () => {
 		expect((await get('/v1/manhwa/alpha-x1/chapters?page=0')).status).toBe(400);
 		expect((await get('/v1/manhwa/alpha-x1/chapters?page=abc')).status).toBe(400);
+	});
+
+	it('rejects an out-of-range listing page on both recently_added paths', async () => {
+		for (const path of ['/v1/recently_added', '/recently_added']) {
+			// 400 before any outbound fetch: nothing stubs fetch here, so reaching
+			// upstream would fail this test rather than come back 400.
+			expect((await get(`${path}?page=0`)).status).toBe(400);
+			expect((await get(`${path}?page=abc`)).status).toBe(400);
+			const response = await get(`${path}?page=99999`);
+			expect(response.status).toBe(400);
+			const body = (await response.json()) as { error: { code: string } };
+			expect(body.error.code).toBe('invalid_page');
+		}
 	});
 
 	it('rejects a slug containing separators', async () => {

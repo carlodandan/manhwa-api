@@ -25,6 +25,7 @@ send `If-None-Match` to get a `304`.
 | --- | --- | --- |
 | GET | `/` | Endpoint index and version marker. |
 | GET | `/v1/home` | All three most-viewed rankings. `?period=1d\|1w\|1m` returns just one. |
+| GET | `/v1/recently_added` | Newest series first, one upstream page at a time. `?page=` (1-based). |
 | GET | `/v1/search?term={term}` | Search by title. `term` is 2–100 characters. |
 | GET | `/v1/manhwa/{slug}` | Series detail plus the most recent chapters. |
 | GET | `/v1/manhwa/{slug}/chapters` | Full chapter list. `?page=` (1-based), `?per_page=` (clamped to 500). |
@@ -32,6 +33,9 @@ send `If-None-Match` to get a `304`.
 
 `GET`, `HEAD` and `OPTIONS` are supported; `HEAD` runs the `GET` route and drops the
 body. Anything else gets `405` with an `Allow` header.
+
+`/recently_added` is an alias of `/v1/recently_added` — same payload, same policy. It is
+not deprecated; the versioned path is simply the canonical one.
 
 ### Deprecated aliases
 
@@ -67,6 +71,39 @@ either a ranking or `null`, and `errors` names the periods that failed:
   "errors": ["1w"]
 }
 ```
+
+`/v1/recently_added` returns `BrowseEntry`, not `ManhwaSummary`. Upstream's browse grid
+carries a description, an exact view count and a badge, and carries nothing at all about
+chapters or update times — so rather than shipping two fields that are permanently
+`null`, it is its own shape. The four a cover grid needs (`title`, `slug`, `cover_url`,
+`rating`) are common to both. Upstream fixes the page size, so there is no `per_page`;
+`count` reports what the page held and `total_pages` bounds `?page=`:
+
+```json
+{
+  "sort": "recently_added",
+  "page": 1,
+  "count": 24,
+  "total": 6961,
+  "total_pages": 291,
+  "results": [
+    {
+      "title": "Some Series",
+      "slug": "some-series-x7",
+      "cover_url": "https://imgsrv5.com/avatar/288x412/media/manga_covers/x.png",
+      "description": "Upstream's own teaser, truncated by upstream with a trailing …",
+      "rating": 4.9,
+      "views": 117815,
+      "badge": "Trending"
+    }
+  ]
+}
+```
+
+`description` is a truncated teaser, not the full text — read that from
+`/v1/manhwa/{slug}`. `page` echoes what upstream served rather than what was asked for:
+upstream clamps a page past the end to the last one, so `?page=400` of 291 comes back as
+`"page": 291` with the final page's results.
 
 Missing values are `null` rather than omitted or faked — an absent cover is `null`, not
 a URL pointing at nothing. Fields the endpoint exists to deliver are the exception: if a
@@ -128,6 +165,7 @@ normalised URL) and in whatever client cache honours `Cache-Control`. `X-Cache: 
 | --- | --- | --- | --- |
 | `/` | 300 | 3600 | 600 |
 | `/v1/home` | 60 | 300 | 600 |
+| `/v1/recently_added` | 60 | 300 | 600 |
 | `/v1/search` | 60 | 300 | 600 |
 | `/v1/manhwa/{slug}` | 120 | 600 | 1800 |
 | `/v1/manhwa/{slug}/chapters` | 120 | 900 | 1800 |
@@ -140,7 +178,8 @@ responses are `no-store`.
 
 Cache keys drop query parameters the route does not use and sort the rest, so
 `?page=2&per_page=50` and `?per_page=50&page=2` share one entry and `?junk=12345` is not
-a free cache-buster into upstream.
+a free cache-buster into upstream. `?page=` is bounded at 10000 for the same reason: an
+unbounded page is an unbounded supply of distinct keys, one upstream fetch apiece.
 
 > **`caches.default` does nothing on `*.workers.dev`.** The Cache API is silently a
 > no-op on the workers.dev subdomain — the code runs, stores nothing, and every request
@@ -265,7 +304,7 @@ and selectors survive attribute reordering and whitespace changes that break reg
 ## Tests
 
 ```bash
-npm test          # 81 tests
+npm test          # 99 tests
 npm run typecheck
 npm run check     # both
 ```
@@ -279,7 +318,8 @@ Fixtures are hand-written HTML that mirrors upstream's markup skeleton with inve
 content; no scraped pages are committed. Because upstream markup is the real dependency
 here, each fixture keeps the specific quirks that have broken this scraper before —
 icon-font ligature text inside stat values, lazy-loaded covers on `data-src`, chapter
-dates in `a.m.`/`p.m.` form, entities in titles, and list items with no anchor at all.
+dates in `a.m.`/`p.m.` form, entities in titles, list items with no anchor at all, and
+headings the browse grid truncates while the neighbouring `alt` keeps the full title.
 
 ## Notes
 

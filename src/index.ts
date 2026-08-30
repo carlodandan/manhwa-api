@@ -1,8 +1,9 @@
 // src/index.ts
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { POLICIES } from './lib/cache';
 import { readConfig, type AppEnv } from './lib/env';
+import { fetchRecentlyAdded } from './handlers/browse';
 import { fetchChapter } from './handlers/chapter';
 import { fetchHome, fetchRanking } from './handlers/home';
 import { fetchChapterList, fetchManhwa } from './handlers/manhwa';
@@ -17,7 +18,7 @@ import {
 	withProxySecret,
 	withRateLimit,
 } from './middleware';
-import { parseChapterId, parsePagination, parsePeriod, parseSearchTerm, parseSlug } from './lib/validate';
+import { parseChapterId, parsePageNumber, parsePagination, parsePeriod, parseSearchTerm, parseSlug } from './lib/validate';
 
 const app = new Hono<AppEnv>();
 
@@ -50,6 +51,10 @@ app.use(
 	withRateLimit((env) => env.READ_LIMITER),
 );
 app.use(
+	'/recently_added',
+	withRateLimit((env) => env.READ_LIMITER),
+);
+app.use(
 	'/reader/*',
 	withRateLimit((env) => env.READ_LIMITER),
 );
@@ -57,6 +62,7 @@ app.use(
 app.use('/v1/*', withEdgeCache);
 app.use('/home', withEdgeCache);
 app.use('/manhwa/*', withEdgeCache);
+app.use('/recently_added', withEdgeCache);
 app.use('/reader/*', withEdgeCache);
 app.use('/autocomplete', withEdgeCache);
 
@@ -70,6 +76,7 @@ app.get('/', (c) =>
 			version: 'v1',
 			endpoints: [
 				{ path: '/v1/home', description: 'Most-viewed rankings. Optional ?period=1d|1w|1m' },
+				{ path: '/v1/recently_added', description: 'Newest series first. Supports ?page= (1-based)' },
 				{ path: '/v1/search?term={term}', description: 'Search series by title (min 2 chars)' },
 				{ path: '/v1/manhwa/{slug}', description: 'Series details plus recent chapters' },
 				{
@@ -81,6 +88,7 @@ app.get('/', (c) =>
 			notes: [
 				'chapterId comes from a chapter listing and is opaque; do not construct it.',
 				'Unversioned paths (/home, /manhwa/{slug}, /autocomplete) are deprecated aliases.',
+				'/recently_added is an alias of /v1/recently_added, not a deprecated path.',
 			],
 		},
 		POLICIES.root,
@@ -100,6 +108,22 @@ app.get('/v1/home', async (c) => {
 
 	return jsonWithCache(c, await fetchHome(config, limiter), POLICIES.home);
 });
+
+/**
+ * Newest series first, one upstream page at a time.
+ *
+ * Upstream fixes the page size, so only `?page=` is accepted — see
+ * `parsePageNumber`. Shared by the versioned path and the `/recently_added` alias
+ * clients asked for; unlike the aliases below, that one is not deprecated.
+ */
+async function recentlyAdded(c: Context<AppEnv>): Promise<Response> {
+	const page = parsePageNumber(c.req.query('page') ?? null);
+	const list = await fetchRecentlyAdded(page, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, list, POLICIES.recentlyAdded);
+}
+
+app.get('/v1/recently_added', recentlyAdded);
+app.get('/recently_added', recentlyAdded);
 
 app.get('/v1/search', async (c) => {
 	const term = parseSearchTerm(c.req.query('term') ?? null);
