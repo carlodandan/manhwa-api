@@ -35,7 +35,7 @@ export function readConfig(env: ConfigVars): Config {
 	const parsedTimeout = Number.parseInt(env.UPSTREAM_TIMEOUT_MS ?? '', 10);
 	const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_TIMEOUT_MS;
 
-	const rawOrigins = (env.ALLOWED_ORIGINS ?? '*').trim();
+	const rawOrigins = (env.ALLOWED_ORIGINS ?? '').trim();
 	const allowedOrigins =
 		rawOrigins === '*'
 			? '*'
