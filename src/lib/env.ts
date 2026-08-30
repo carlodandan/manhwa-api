@@ -59,6 +59,15 @@ export interface Bindings {
 	READ_LIMITER?: RateLimitBinding;
 	SEARCH_LIMITER?: RateLimitBinding;
 	UPSTREAM_LIMITER?: RateLimitBinding;
+	/**
+	 * Shared secret the Pages Function presents in `X-Proxy-Secret`, proving the
+	 * request came through the frontend rather than straight off the internet.
+	 *
+	 * Set with `wrangler secret put PROXY_SECRET`; it is a secret rather than a
+	 * `vars` entry so it never lands in wrangler.jsonc. When unset the check is
+	 * skipped, which is what keeps local dev and the test suite working.
+	 */
+	PROXY_SECRET?: string;
 }
 
 /** Hono generic parameter: what `c.env` and `c.var` hold. */

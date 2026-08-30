@@ -156,11 +156,65 @@ the defaults below.
 | --- | --- | --- |
 | `UPSTREAM_BASE_URL` | `https://www.mgeko.cc` | Origin to scrape. Trailing slashes are stripped. |
 | `UPSTREAM_TIMEOUT_MS` | `8000` | Per-request upstream timeout. Non-numeric values are ignored. |
-| `ALLOWED_ORIGINS` | `*` | `*`, or a comma-separated origin allowlist. |
+| `ALLOWED_ORIGINS` | *(none)* | Comma-separated origin allowlist, or `*` for any. |
 
-`ALLOWED_ORIGINS` defaults to `*` because this is a public read-only API. Set it to an
-explicit list if you would rather other sites not build against your worker; responses
-then vary on `Origin`.
+`ALLOWED_ORIGINS` allows nothing when unset, so dropping the var fails closed instead
+of quietly opening the API to every site. Matching is exact — neither a case-shifted
+spelling nor `https://allowed.example.evil.test` gets through — and responses always
+vary on `Origin` unless the value is `*`, so a shared cache cannot replay one origin's
+response to another.
+
+Two things it does not do. It only constrains browsers: curl, a server, or a mobile
+app still gets full responses, and `Origin` is trivially spoofed outside a browser.
+And preview URLs are separate origins, so `https://<branch>.panelrift.pages.dev` and
+`http://localhost:5173` need adding explicitly if you want them working.
+
+Genuine enforcement lives one layer out: the [Panelrift frontend](../manhwa-web) calls
+this worker through a Pages Function over a service binding, which lets `workers_dev`
+be switched off so the public hostname disappears altogether.
+
+### Secrets
+
+| Secret | Purpose |
+| --- | --- |
+| `PROXY_SECRET` | Shared with the Pages Function; presented in `X-Proxy-Secret`. |
+
+`PROXY_SECRET` is the control an Origin allowlist cannot be. The frontend's Pages
+Function adds the header server-side, so it never reaches a browser, and anything
+arriving without it gets an opaque `403` — before the rate limiters and before any
+upstream fetch, so a refused caller costs two digests. The compare digests both sides
+to SHA-256 first, which keeps it constant-time and leaks neither the secret's length
+nor where a guess diverged.
+
+Set it on both ends, with the same value:
+
+```bash
+wrangler secret put PROXY_SECRET                       # here
+cd ../manhwa-web && wrangler pages secret put PROXY_SECRET
+```
+
+An unset `PROXY_SECRET` skips the check entirely, which is what keeps `wrangler dev`
+and the test suite usable without one. That does mean a deploy that loses the secret
+fails *open* on this control — unlike `ALLOWED_ORIGINS` — so it is the second lock
+rather than the first. `workers_dev: false` remains the one that removes the door.
+
+To rotate: set the new value on the worker, then on Pages. Requests in flight during
+the gap get a 403, so do it at a quiet moment or accept a few seconds of errors.
+
+### Response headers
+
+Every response, refused ones included, carries `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'`, `X-Robots-Tag: noindex, nofollow` — search engines indexing a
+JSON endpoint is one of the ways an API gets discovered — and
+`Cross-Origin-Resource-Policy: same-origin`, which blocks the `no-cors` embedding that
+CORS by itself does not cover.
+
+The `Access-Control-Allow-Methods`, `-Headers`, `-Expose-Headers` and `-Max-Age`
+quartet is sent only to a caller that passed the allowlist, so a refusal advertises
+nothing about what would have been accepted. `Access-Control-Allow-Credentials` is
+deliberately never sent: there are no cookies to carry, and combined with origin
+reflection it would be a real hole.
 
 ## Layout
 

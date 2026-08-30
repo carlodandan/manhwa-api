@@ -4,7 +4,7 @@ import type { Context, ErrorHandler, MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cacheControl, cacheKeyFor, cacheLookup, cacheStore, POLICIES, weakETag, type Deferrable } from './lib/cache';
 import { readConfig, type AppEnv, type Config, type RateLimitBinding } from './lib/env';
-import { ApiError, tooManyRequests } from './lib/errors';
+import { ApiError, forbidden, tooManyRequests } from './lib/errors';
 import type { ApiErrorBody } from './types';
 
 /** Attach parsed config and a request id for correlating logs. */
@@ -32,8 +32,9 @@ export function allowOriginFor(origin: string | null | undefined, allowedOrigins
 /**
  * CORS and security headers.
  *
- * `ALLOWED_ORIGINS` defaults to "*" because this is a public read-only API; set it
- * to an explicit list to stop other sites building against your worker.
+ * `ALLOWED_ORIGINS` denies every origin when unset, so a dropped var fails closed
+ * rather than silently opening the API to every site. Set it to `*` to opt into a
+ * genuinely public API, or to a comma-separated allowlist.
  *
  * Applied by both the middleware and the error handler, because Hono produces
  * error responses outside the normal middleware unwind.
@@ -42,7 +43,15 @@ function applyStandardHeaders(c: Context<AppEnv>): void {
 	const { allowedOrigins } = c.get('config') ?? readConfig(c.env);
 	const allowOrigin = allowOriginFor(c.req.header('Origin'), allowedOrigins);
 
-	if (allowOrigin) c.header('Access-Control-Allow-Origin', allowOrigin);
+	if (allowOrigin) {
+		c.header('Access-Control-Allow-Origin', allowOrigin);
+		// Only useful to a caller that was actually allowed, so a refusal advertises
+		// nothing about what the API would have accepted.
+		c.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+		c.header('Access-Control-Allow-Headers', 'Content-Type, If-None-Match');
+		c.header('Access-Control-Expose-Headers', 'ETag, Retry-After');
+		c.header('Access-Control-Max-Age', '86400');
+	}
 	if (allowedOrigins !== '*') {
 		// The header above depends on the request Origin, so any shared cache has to
 		// key on it. Set this even when the Origin is refused: responses here carry
@@ -51,12 +60,49 @@ function applyStandardHeaders(c: Context<AppEnv>): void {
 		c.header('Vary', 'Origin');
 	}
 
-	c.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-	c.header('Access-Control-Allow-Headers', 'Content-Type, If-None-Match');
-	c.header('Access-Control-Expose-Headers', 'ETag, Retry-After');
-	c.header('Access-Control-Max-Age', '86400');
 	c.header('X-Content-Type-Options', 'nosniff');
+	// Blocks `no-cors` embedding, which CORS on its own does not cover: a page can
+	// load this URL as a subresource without ever reading a response header.
+	c.header('Cross-Origin-Resource-Policy', 'same-origin');
+	// Nothing served here is a document, so refuse every subresource and framing.
+	c.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+	c.header('Referrer-Policy', 'no-referrer');
+	// Search engines indexing a JSON endpoint is one of the ways an API gets found.
+	c.header('X-Robots-Tag', 'noindex, nofollow');
 }
+
+/** SHA-256 of a string, as the fixed-length buffer `timingSafeEqual` requires. */
+async function sha256(value: string): Promise<ArrayBuffer> {
+	return crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+}
+
+/**
+ * Require the shared secret that proves a request came through the frontend's
+ * Pages Function rather than straight off the internet.
+ *
+ * This is the control an Origin allowlist cannot be: CORS only ever constrains
+ * browsers, and anyone calling with curl picks their own `Origin` header. The
+ * secret lives server-side in the Pages Function, so it never reaches a browser.
+ *
+ * Mounted ahead of the rate limiters and the cache, so refusing a caller costs
+ * two digests and nothing else.
+ *
+ * An unset `PROXY_SECRET` skips the check outright. That is deliberate rather than
+ * a fallback: local dev and the test suite both run without one.
+ */
+export const withProxySecret: MiddlewareHandler<AppEnv> = async (c, next) => {
+	const expected = c.env.PROXY_SECRET;
+	if (!expected) return next();
+
+	// Digest both sides first so the comparison sees two equal-length buffers,
+	// leaking neither the secret's length nor where the first byte diverges.
+	const [presented, wanted] = await Promise.all([sha256(c.req.header('X-Proxy-Secret') ?? ''), sha256(expected)]);
+	if (!crypto.subtle.timingSafeEqual(presented, wanted)) {
+		throw forbidden('missing or invalid X-Proxy-Secret');
+	}
+
+	return next();
+};
 
 export const withCors: MiddlewareHandler<AppEnv> = async (c, next) => {
 	await next();

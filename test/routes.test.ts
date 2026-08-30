@@ -4,8 +4,8 @@
 // upstream site: request validation, method handling, CORS and the error
 // envelope all resolve before any outbound fetch is attempted.
 
-import { SELF } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { SELF, env } from 'cloudflare:test';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const ORIGIN = 'https://api.test';
 
@@ -84,7 +84,10 @@ describe('request validation', () => {
 
 describe('method handling', () => {
 	it('answers preflight with 204 and the CORS headers', async () => {
-		const response = await get('/v1/home', { method: 'OPTIONS' });
+		const response = await get('/v1/home', {
+			method: 'OPTIONS',
+			headers: { Origin: 'https://panelrift.pages.dev', 'Access-Control-Request-Method': 'GET' },
+		});
 		expect(response.status).toBe(204);
 		expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
 		expect(response.headers.get('Access-Control-Max-Age')).toBe('86400');
@@ -164,5 +167,84 @@ describe('origin allowlist', () => {
 
 		const denied = await get('/v1/home', { method: 'POST', headers: { Origin: 'https://evil.example' } });
 		expect(denied.headers.get('Access-Control-Allow-Origin')).toBeNull();
+	});
+});
+
+describe('hardening headers', () => {
+	it('sends them to allowed and refused callers alike', async () => {
+		const cases: Record<string, string>[] = [{ Origin: 'https://panelrift.pages.dev' }, { Origin: 'https://evil.example' }, {}];
+
+		for (const headers of cases) {
+			const response = await get('/', { headers });
+			expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+			// CORP is the one that covers what CORS cannot: `no-cors` embedding.
+			expect(response.headers.get('Cross-Origin-Resource-Policy')).toBe('same-origin');
+			expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+			expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+			expect(response.headers.get('X-Robots-Tag')).toContain('noindex');
+		}
+	});
+
+	it('advertises the allowed methods only to a caller that passed the allowlist', async () => {
+		const denied = await get('/', { headers: { Origin: 'https://evil.example' } });
+		expect(denied.headers.get('Access-Control-Allow-Methods')).toBeNull();
+		expect(denied.headers.get('Access-Control-Max-Age')).toBeNull();
+	});
+});
+
+describe('proxy secret', () => {
+	// A secret rather than a `vars` entry, so it is absent from wrangler.jsonc and
+	// from the generated `Env`. It starts undefined, which means every other test in
+	// this file runs with the check disabled.
+	const testEnv = env as typeof env & { PROXY_SECRET?: string };
+	const SECRET = 'correct-horse-battery-staple';
+
+	afterEach(() => {
+		delete testEnv.PROXY_SECRET;
+	});
+
+	it('is skipped entirely when unset, so local dev needs no secret', async () => {
+		expect(testEnv.PROXY_SECRET).toBeUndefined();
+		expect((await get('/')).status).toBe(200);
+	});
+
+	it('serves a request carrying the right secret', async () => {
+		testEnv.PROXY_SECRET = SECRET;
+		const response = await get('/', { headers: { 'X-Proxy-Secret': SECRET } });
+		expect(response.status).toBe(200);
+	});
+
+	it('refuses a wrong, absent, or truncated secret with an opaque 403', async () => {
+		testEnv.PROXY_SECRET = SECRET;
+
+		const cases: Record<string, string>[] = [
+			{},
+			{ 'X-Proxy-Secret': 'wrong' },
+			// A prefix must fail too, or the compare is leaking length.
+			{ 'X-Proxy-Secret': SECRET.slice(0, -1) },
+			{ 'X-Proxy-Secret': '' },
+		];
+
+		for (const headers of cases) {
+			const response = await get('/', { headers });
+			expect(response.status).toBe(403);
+			const body = (await response.json()) as { error: { code: string; message: string } };
+			expect(body.error.code).toBe('forbidden');
+			// The reason is logged, never returned: a probe learns nothing about why.
+			expect(body.error.message).toBe('Forbidden');
+		}
+	});
+
+	it('refuses before spending the upstream budget on a real route', async () => {
+		testEnv.PROXY_SECRET = SECRET;
+		// Nothing stubs fetch here, so reaching upstream would fail this test rather
+		// than come back 403.
+		expect((await get('/v1/manhwa/alpha-x1')).status).toBe(403);
+	});
+
+	it('still refuses when the caller also presents an allowed Origin', async () => {
+		testEnv.PROXY_SECRET = SECRET;
+		const response = await get('/', { headers: { Origin: 'https://panelrift.pages.dev' } });
+		expect(response.status).toBe(403);
 	});
 });

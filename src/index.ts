@@ -7,13 +7,25 @@ import { fetchChapter } from './handlers/chapter';
 import { fetchHome, fetchRanking } from './handlers/home';
 import { fetchChapterList, fetchManhwa } from './handlers/manhwa';
 import { searchManhwa } from './handlers/search';
-import { allowOriginFor, errorHandler, jsonWithCache, withConfig, withCors, withEdgeCache, withRateLimit } from './middleware';
+import {
+	allowOriginFor,
+	errorHandler,
+	jsonWithCache,
+	withConfig,
+	withCors,
+	withEdgeCache,
+	withProxySecret,
+	withRateLimit,
+} from './middleware';
 import { parseChapterId, parsePagination, parsePeriod, parseSearchTerm, parseSlug } from './lib/validate';
 
 const app = new Hono<AppEnv>();
 
 app.use('*', withConfig);
 app.use('*', withCors);
+// Ahead of the rate limiters and the cache: an unauthorised caller should cost a
+// digest and nothing more. No-ops when PROXY_SECRET is unset.
+app.use('*', withProxySecret);
 app.onError(errorHandler);
 
 // Search gets its own, tighter budget: clients fire it on every keystroke.

@@ -149,7 +149,13 @@ describe('readConfig', () => {
 		const config = readConfig({});
 		expect(config.baseUrl).toBe('https://www.mgeko.cc');
 		expect(config.timeoutMs).toBe(8000);
-		expect(config.allowedOrigins).toBe('*');
+		// Deny by default: an absent ALLOWED_ORIGINS must not silently open the API
+		// to every site, so it resolves to an empty allowlist rather than "*".
+		expect(config.allowedOrigins).toEqual([]);
+	});
+
+	it('opens up to any origin only when asked explicitly', () => {
+		expect(readConfig({ ALLOWED_ORIGINS: '*' }).allowedOrigins).toBe('*');
 	});
 
 	it('parses an explicit origin allowlist and trims the base URL', () => {

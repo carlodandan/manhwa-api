@@ -27,6 +27,14 @@ export function badRequest(code: string, message: string): ApiError {
 	return new ApiError(400, code, message);
 }
 
+/**
+ * The caller is not the trusted proxy. Deliberately says nothing about why: a
+ * probe should not learn whether the secret is unset, wrong, or merely absent.
+ */
+export function forbidden(detail?: string): ApiError {
+	return new ApiError(403, 'forbidden', 'Forbidden', detail);
+}
+
 /** Client exceeded its rate limit. */
 export function tooManyRequests(message = 'Rate limit exceeded'): ApiError {
 	return new ApiError(429, 'rate_limited', message);
