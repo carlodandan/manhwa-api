@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel a superseded run rather than paying for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Worker types are generated from wrangler.jsonc, so a binding added there
+      # without regenerating them would otherwise typecheck against stale types.
+      - name: Generate worker types
+        run: npm run cf-typegen
+
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test

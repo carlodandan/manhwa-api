@@ -1,115 +1,74 @@
 // src/handlers/manhwa.ts
 
-import { BASE_URL, cleanText, absoluteUrl } from '../utils';
+import type { Config, RateLimitBinding } from '../lib/env';
+import { parseError } from '../lib/errors';
+import { fetchUpstream } from '../lib/upstream';
+import { parseChapterList } from '../parsers/chapterList';
+import { parseManhwaPage } from '../parsers/manhwa';
+import type { ChapterList, Manhwa } from '../types';
 
 /**
- * Parse the manhwa detail HTML and extract structured data.
+ * Series detail pages live at `/manga/{slug}/`.
+ *
+ * The previous implementation requested `/manhwa/{slug}/`, which upstream answers
+ * with a 404 — the whole endpoint was dead.
  */
-export function parseManhwaHtml(html: string): any {
-  const result: any = {};
+function detailPath(slug: string): string {
+	return `/manga/${encodeURIComponent(slug)}/`;
+}
 
-  // Title
-  const titleMatch = html.match(/<h1[^>]*class="novel-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/);
-  if (titleMatch) result.title = cleanText(titleMatch[1]);
+function allChaptersPath(slug: string): string {
+	return `/manga/${encodeURIComponent(slug)}/all-chapters/`;
+}
 
-  // Alternative title
-  const altTitleMatch = html.match(/<h2[^>]*class="alternative-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
-  if (altTitleMatch) result.alternative_title = cleanText(altTitleMatch[1]);
+/** Fetch and parse one series' detail record. */
+export async function fetchManhwa(slug: string, config: Config, limiter?: RateLimitBinding): Promise<Manhwa> {
+	const response = await fetchUpstream(detailPath(slug), config, {
+		describe: `Manhwa '${slug}'`,
+		limiter,
+	});
 
-  // Author
-  const authorMatch = html.match(/<span[^>]*itemprop="author"[^>]*>([\s\S]*?)<\/span>/);
-  if (authorMatch) result.author = cleanText(authorMatch[1]);
+	const manhwa = await parseManhwaPage(response, slug, config.baseUrl);
 
-  // Rating (number and count)
-  const ratingMatch = html.match(/<strong>([\d.]+)<span[^>]*>\s*\(([\d,]+)\)\s*<\/span><\/strong>/);
-  if (ratingMatch) {
-    result.rating = parseFloat(ratingMatch[1]);
-    result.rating_count = parseInt(ratingMatch[2].replace(/,/g, ''), 10);
-  }
+	// A detail page without a title means the markup changed; better to surface a
+	// 502 than to hand the client a record full of nulls with a 200.
+	if (!manhwa.title) {
+		throw parseError(`the title for '${slug}'`, detailPath(slug));
+	}
 
-  // Status
-  const statusMatch = html.match(/<strong class="(?:ongoing|completed|hiatus|dropped)">([^<]+)<\/strong>/);
-  if (statusMatch) result.status = statusMatch[1].trim();
-
-  // Cover image URL
-  const coverMatch = html.match(/<img[^>]*class="lazy"[^>]*data-src="([^"]+)"/);
-  if (coverMatch) result.cover_url = absoluteUrl(coverMatch[1]);
-
-  // Categories / genres
-  const categoriesSection = html.match(/<div class="categories">([\s\S]*?)<\/div>/);
-  if (categoriesSection) {
-    const genreMatches = categoriesSection[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g);
-    const genres: string[] = [];
-    for (const match of genreMatches) {
-      genres.push(cleanText(match[1]));
-    }
-    result.genres = genres;
-  }
-
-  // Description
-  const descMatch = html.match(/<p class="description">([\s\S]*?)<\/p>/);
-  if (descMatch) {
-    result.description = cleanText(descMatch[1])
-      .replace(/The Summary is\s*/, '')
-      .trim();
-  }
-
-  // Stats: views, bookmarks, chapter count
-  const statsSection = html.match(/<div class="header-stats">([\s\S]*?)<\/div>/);
-  if (statsSection) {
-    const statBlocks = statsSection[1].matchAll(/<span>([\s\S]*?)<\/span>/g);
-    for (const block of statBlocks) {
-      const strongText = block[1].match(/<strong>([\s\S]*?)<\/strong>/);
-      const smallText = block[1].match(/<small>([^<]+)<\/small>/);
-      if (strongText && smallText) {
-        const label = smallText[1].trim().toLowerCase();
-        const value = cleanText(strongText[1]);
-        if (label === 'views') result.views = value;
-        else if (label === 'bookmarked') result.bookmarks = value;
-        else if (label === 'chapters') result.chapter_count = value;
-      }
-    }
-  }
-
-  // Last update
-  const updMatch = html.match(/<div class="updinfo">[\s\S]*?<strong>([\s\S]*?)<\/strong>/);
-  if (updMatch) result.last_updated = cleanText(updMatch[1]);
-
-  // Chapters
-  const chaptersList = html.match(/<ul class="chapter-list"[\s\S]*?<\/ul>/);
-  if (chaptersList) {
-    const chapterItems = chaptersList[0].matchAll(/<li[^>]*data-chapterno[^>]*>([\s\S]*?)<\/li>/g);
-    const chapters: any[] = [];
-    for (const item of chapterItems) {
-      const block = item[1];
-      const linkMatch = block.match(/<a href="([^"]+)"/);
-      const numberMatch = block.match(/<div class="chapter-number"[^>]*>\s*([^<]+)/);
-      const dateMatch = block.match(/<span class="chapter-stats"[^>]*>([\s\S]*?)<\/span>/);
-      if (linkMatch && numberMatch) {
-        chapters.push({
-          number: cleanText(numberMatch[1]),
-          link: absoluteUrl(linkMatch[1]),
-          date: dateMatch ? cleanText(dateMatch[1]) : null,
-        });
-      }
-    }
-    result.chapters = chapters;
-  }
-
-  return result;
+	return manhwa;
 }
 
 /**
- * Fetch and parse manhwa details by slug.
+ * Fetch the complete chapter list.
+ *
+ * The detail page truncates its list (about 50 entries against 200+ actual), so
+ * the full set comes from the dedicated `/all-chapters/` page and is paginated
+ * here rather than returned as one unbounded array.
  */
-export async function fetchManhwa(slug: string): Promise<any> {
-  const manhwaUrl = `${BASE_URL}/manhwa/${slug}/`;
-  const response = await fetch(manhwaUrl);
+export async function fetchChapterList(
+	slug: string,
+	page: number,
+	perPage: number,
+	config: Config,
+	limiter?: RateLimitBinding,
+): Promise<ChapterList> {
+	const response = await fetchUpstream(allChaptersPath(slug), config, {
+		describe: `Chapters for '${slug}'`,
+		limiter,
+	});
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch manhwa (${slug}): ${response.status}`);
-  }
+	const chapters = await parseChapterList(response);
+	if (chapters.length === 0) {
+		throw parseError(`any chapters for '${slug}'`, allChaptersPath(slug));
+	}
 
-  const html = await response.text();
-  return parseManhwaHtml(html);
+	const start = (page - 1) * perPage;
+	return {
+		slug,
+		total: chapters.length,
+		page,
+		per_page: perPage,
+		chapters: chapters.slice(start, start + perPage),
+	};
 }

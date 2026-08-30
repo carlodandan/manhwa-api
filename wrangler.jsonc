@@ -10,33 +10,56 @@
 	"observability": {
 		"enabled": true
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+
+	"vars": {
+		// Upstream site being scraped. Override per-environment if it ever moves.
+		"UPSTREAM_BASE_URL": "https://www.mgeko.cc",
+		// Milliseconds before an upstream request is aborted.
+		"UPSTREAM_TIMEOUT_MS": "8000",
+		// Comma-separated allowlist of browser Origins, or "*" for any.
+		"ALLOWED_ORIGINS": "*"
+	},
+
+	/**
+	 * Rate limiting.
+	 *
+	 * `simple.period` only accepts 10 or 60. Counters are enforced per-colo, not
+	 * globally, so a distributed client can achieve roughly limit x colo-count.
+	 * That is fine for accidental abuse; use a Durable Object if you need exact
+	 * global limits.
+	 */
+	"unsafe": {
+		"bindings": [
+			{
+				// Per-IP budget for cheap reads (/home, /manhwa, /chapters).
+				"name": "READ_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1001",
+				"simple": { "limit": 60, "period": 60 }
+			},
+			{
+				// Per-IP budget for search, which clients fire on every keystroke.
+				"name": "SEARCH_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1002",
+				"simple": { "limit": 20, "period": 10 }
+			},
+			{
+				// Global ceiling on outbound requests to the upstream site. Keyed on a
+				// constant so every visitor shares one budget. Protects the origin even
+				// when each individual IP is within its own limit.
+				"name": "UPSTREAM_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1003",
+				"simple": { "limit": 600, "period": 60 }
+			}
+		]
+	}
+
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */
 	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
 }

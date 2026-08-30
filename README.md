@@ -1,0 +1,210 @@
+# manhwa-api
+
+A read-only JSON API over [mgeko.cc](https://www.mgeko.cc), running on Cloudflare Workers.
+It scrapes HTML with `HTMLRewriter`, normalises it into a stable contract, and puts an
+edge cache plus per-IP rate limits in front of the upstream site.
+
+Nothing is stored: every response is derived from a live upstream fetch or from the
+edge cache.
+
+## Quick start
+
+```bash
+npm install
+npm run dev      # local worker on http://localhost:8787
+npm run check    # typecheck + tests
+npm run deploy   # wrangler deploy
+```
+
+## Endpoints
+
+All responses are `application/json; charset=utf-8` and carry a weak `ETag`;
+send `If-None-Match` to get a `304`.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/` | Endpoint index and version marker. |
+| GET | `/v1/home` | All three most-viewed rankings. `?period=1d\|1w\|1m` returns just one. |
+| GET | `/v1/search?term={term}` | Search by title. `term` is 2–100 characters. |
+| GET | `/v1/manhwa/{slug}` | Series detail plus the most recent chapters. |
+| GET | `/v1/manhwa/{slug}/chapters` | Full chapter list. `?page=` (1-based), `?per_page=` (clamped to 500). |
+| GET | `/v1/chapters/{chapterId}` | Chapter page images and neighbour ids. |
+
+`GET`, `HEAD` and `OPTIONS` are supported; `HEAD` runs the `GET` route and drops the
+body. Anything else gets `405` with an `Allow` header.
+
+### Deprecated aliases
+
+`/home`, `/autocomplete?term=`, `/manhwa/{slug}` and `/reader/en/{chapterId}` are kept
+so existing clients keep working. Prefer the `/v1/` paths — `/autocomplete` in
+particular returns a bare array rather than the `{ term, count, results }` envelope.
+
+## Identifiers
+
+`slug` is the series identifier from a listing, e.g. `some-series-x7`.
+
+`chapterId` is **opaque**. It comes from a chapter listing and must not be constructed:
+upstream's reader ids look like `{series}-chapter-{n}-eng-li`, the series part does not
+always match the detail-page slug, and the shape is upstream's to change. Read it from
+`chapters[].id` and pass it through.
+
+## Response shapes
+
+The full set lives in [`src/types.ts`](src/types.ts) — that file is the contract. Two
+things worth calling out:
+
+`/v1/manhwa/{slug}` returns `chapters_truncated: true`, because upstream's detail page
+only renders the most recent chapters. Use `/v1/manhwa/{slug}/chapters` for everything.
+
+`/v1/home` degrades per period rather than as a whole. Each of `1d`, `1w` and `1m` is
+either a ranking or `null`, and `errors` names the periods that failed:
+
+```json
+{
+  "1d": { "period": "1d", "manhwa": [] },
+  "1w": null,
+  "1m": { "period": "1m", "manhwa": [] },
+  "errors": ["1w"]
+}
+```
+
+Missing values are `null` rather than omitted or faked — an absent cover is `null`, not
+a URL pointing at nothing. Fields the endpoint exists to deliver are the exception: if a
+series has no title, or a chapter no images, the parser fails with `502 parse_error`
+instead of returning a hollow `200`. That turns an upstream markup change into a loud
+error rather than silently empty results.
+
+### Errors
+
+Every non-2xx response uses one envelope:
+
+```json
+{ "error": { "code": "not_found", "message": "Unknown endpoint" } }
+```
+
+| Status | Codes |
+| --- | --- |
+| 400 | `missing_slug`, `invalid_slug`, `missing_chapter_id`, `invalid_chapter_id`, `term_too_short`, `term_too_long`, `invalid_page`, `invalid_per_page`, `invalid_period` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 429 | `rate_limited` (with `Retry-After`) |
+| 500 | `internal_error` |
+| 502 | `upstream_error`, `parse_error` |
+| 504 | `upstream_timeout` |
+
+Diagnostic detail — upstream URLs, parser state — is written to the worker logs with a
+request id, never to the response body.
+
+## Caching
+
+Responses are cached twice: in the Cloudflare edge cache (read-through, keyed on a
+normalised URL) and in whatever client cache honours `Cache-Control`. `X-Cache: HIT` or
+`MISS` tells you which side served you.
+
+| Route | `max-age` | `s-maxage` | `stale-while-revalidate` |
+| --- | --- | --- | --- |
+| `/` | 300 | 3600 | 600 |
+| `/v1/home` | 60 | 300 | 600 |
+| `/v1/search` | 60 | 300 | 600 |
+| `/v1/manhwa/{slug}` | 120 | 600 | 1800 |
+| `/v1/manhwa/{slug}/chapters` | 120 | 900 | 1800 |
+| `/v1/chapters/{id}` | 3600 | 86400 | 86400 |
+| 404 responses | 30 | 60 | — |
+
+Chapter pages get the long TTL because published images do not change. 404s are
+negative-cached so a client looping on a bad slug stops reaching upstream. Other error
+responses are `no-store`.
+
+Cache keys drop query parameters the route does not use and sort the rest, so
+`?page=2&per_page=50` and `?per_page=50&page=2` share one entry and `?junk=12345` is not
+a free cache-buster into upstream.
+
+> **`caches.default` does nothing on `*.workers.dev`.** The Cache API is silently a
+> no-op on the workers.dev subdomain — the code runs, stores nothing, and every request
+> is a `MISS`. Deploy to a custom domain or a zone route to actually get edge caching.
+> `Cache-Control` still works for clients either way.
+
+## Rate limiting
+
+Three limiters, all keyed on `CF-Connecting-IP`, configured under `unsafe.bindings` in
+[`wrangler.jsonc`](wrangler.jsonc):
+
+| Binding | Applies to | Limit |
+| --- | --- | --- |
+| `SEARCH_LIMITER` | `/v1/search`, `/autocomplete` | 20 requests / 10 s |
+| `READ_LIMITER` | every other data route | 60 requests / 60 s |
+| `UPSTREAM_LIMITER` | outbound fetches, in aggregate | 600 / 60 s |
+
+Search gets the tighter window because clients tend to fire it on every keystroke.
+`UPSTREAM_LIMITER` is a global ceiling on the traffic this worker sends upstream, which
+per-IP limits alone cannot bound.
+
+Two caveats. Counters are enforced **per colo, not globally**, so a distributed client
+can reach roughly `limit x colo-count` — this stops runaway clients and accidental
+retry loops, not a determined attacker. And if a binding is missing (local dev without
+unsafe bindings, for instance) the middleware **fails open** and logs a warning, so
+development is not blocked by an absent limiter.
+
+Exceeding a limit returns `429` with `Retry-After: 60`.
+
+## Configuration
+
+Set in `vars` in [`wrangler.jsonc`](wrangler.jsonc); all are optional and fall back to
+the defaults below.
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `UPSTREAM_BASE_URL` | `https://www.mgeko.cc` | Origin to scrape. Trailing slashes are stripped. |
+| `UPSTREAM_TIMEOUT_MS` | `8000` | Per-request upstream timeout. Non-numeric values are ignored. |
+| `ALLOWED_ORIGINS` | `*` | `*`, or a comma-separated origin allowlist. |
+
+`ALLOWED_ORIGINS` defaults to `*` because this is a public read-only API. Set it to an
+explicit list if you would rather other sites not build against your worker; responses
+then vary on `Origin`.
+
+## Layout
+
+```
+src/
+  index.ts         routes and the fetch handler
+  middleware.ts    config, CORS, rate limits, edge cache, error envelope
+  types.ts         public response contract
+  lib/             env, errors, cache policy, HTML helpers, validation, upstream fetch
+  parsers/         HTMLRewriter parsers, one per upstream page shape
+  handlers/        parser output -> public shape
+test/
+  fixtures/        synthetic HTML mirroring upstream markup
+```
+
+Upstream requests go through `lib/upstream.ts`, which sets a browser `User-Agent`,
+applies `AbortSignal.timeout`, retries a bounded set of statuses with jittered backoff,
+and maps upstream 404/410 to a `404` rather than retrying it.
+
+Parsing uses `HTMLRewriter` rather than regexes over the whole document — it streams,
+and selectors survive attribute reordering and whitespace changes that break regexes.
+
+## Tests
+
+```bash
+npm test          # 61 tests
+npm run typecheck
+npm run check     # both
+```
+
+Tests run in `workerd` via `@cloudflare/vitest-pool-workers`, so route tests exercise
+the real worker through `SELF.fetch`. The three suites cover parsers against fixtures,
+pure normalisation and validation helpers, and end-to-end route behaviour — validation,
+methods, CORS, and the error envelope, all of which resolve before any outbound fetch.
+
+Fixtures are hand-written HTML that mirrors upstream's markup skeleton with invented
+content; no scraped pages are committed. Because upstream markup is the real dependency
+here, each fixture keeps the specific quirks that have broken this scraper before —
+icon-font ligature text inside stat values, lazy-loaded covers on `data-src`, chapter
+dates in `a.m.`/`p.m.` form, entities in titles, and list items with no anchor at all.
+
+## Notes
+
+Scraping is inherently fragile: upstream can change its markup at any time, and when it
+does, the parsers fail loudly with `502 parse_error`. That is the intended behaviour —
+check the logs for the failing selector, update the parser, and add the new markup to a
+fixture. Respect upstream's terms and keep `UPSTREAM_LIMITER` conservative.

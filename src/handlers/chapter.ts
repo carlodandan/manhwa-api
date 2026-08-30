@@ -1,87 +1,37 @@
 // src/handlers/chapter.ts
 
-import { BASE_URL, cleanText, absoluteUrl } from '../utils';
+import type { Config, RateLimitBinding } from '../lib/env';
+import { parseError } from '../lib/errors';
+import { fetchUpstream } from '../lib/upstream';
+import { parseChapter } from '../parsers/chapter';
+import type { Chapter } from '../types';
 
 /**
- * Parse chapter HTML and extract structured data.
+ * Reader pages live at `/reader/en/{chapterId}/`, where `chapterId` is upstream's
+ * own chapter slug — e.g. `some-series-chapter-155-eng-li`.
+ *
+ * It is NOT `{seriesSlug}-chapter-{n}`: the series slug and the reader slug
+ * differ, so the old `/reader/en/{slug}-chapter-{n}` route always 404'd. Treat the
+ * id as opaque and take it from a chapter listing.
  */
-export function parseChapterHtml(html: string): any {
-  const result: any = {};
-
-  // Manhwa title (inside <h1>)
-  const titleMatch = html.match(/<h1>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/);
-  if (titleMatch) {
-    result.manhwa_title = cleanText(titleMatch[1]);
-  }
-
-  // Chapter title (inside <h2>)
-  const chapterTitleMatch = html.match(/<h2>([\s\S]*?)<\/h2>/);
-  if (chapterTitleMatch) {
-    result.chapter_title = cleanText(chapterTitleMatch[1]);
-  }
-
-  // Navigation: find the bottom chapternav (there are two)
-  const navBlocks = html.match(/<div class="chapternav skiptranslate"[\s\S]*?<\/div>/g);
-  if (navBlocks && navBlocks.length >= 2) {
-    const bottomNav = navBlocks[1]; // bottom one
-    const prevMatch = bottomNav.match(/<a[^>]*class="prevchap[^"]*"[^>]*href="([^"]*)"/);
-    if (prevMatch) {
-      const href = prevMatch[1];
-      result.prev_chapter_url = href === '#' ? null : absoluteUrl(href);
-    }
-    const nextMatch = bottomNav.match(/<a[^>]*class="nextchap[^"]*"[^>]*href="([^"]*)"/);
-    if (nextMatch) {
-      const href = nextMatch[1];
-      result.next_chapter_url = href === '#' ? null : absoluteUrl(href);
-    }
-  }
-
-  // Chapter list from <select> (use the first one, both have same options)
-  const selectMatch = html.match(/<select[^>]*>([\s\S]*?)<\/select>/);
-  if (selectMatch) {
-    const options = selectMatch[1].match(/<option[^>]*value="([^"]*)"[^>]*>([\s\S]*?)<\/option>/g);
-    if (options) {
-      result.chapters = options.map((opt) => {
-        const valMatch = opt.match(/value="([^"]*)"/);
-        const textMatch = opt.match(/>([\s\S]*?)<\/option>/);
-        return {
-          number: textMatch ? cleanText(textMatch[1]).replace(/^Chapter:\s*/, '') : null,
-          url: valMatch && valMatch[1] ? absoluteUrl(valMatch[1]) : null,
-        };
-      }).filter(c => c.url);
-    }
-  }
-
-  // Images: extract all <img> tags whose src contains "sv2/comic/" (manhwa pages)
-  const allImgTags = html.match(/<img[^>]*src="([^"]*)"[^>]*>/g);
-  if (allImgTags) {
-    const images: string[] = [];
-    for (const imgTag of allImgTags) {
-      const srcMatch = imgTag.match(/src="([^"]*)"/);
-      if (srcMatch) {
-        const src = srcMatch[1];
-        if (src.includes('sv2/comic/')) {
-          images.push(src);
-        }
-      }
-    }
-    result.images = images;
-  }
-
-  return result;
+function readerPath(chapterId: string): string {
+	return `/reader/en/${encodeURIComponent(chapterId)}/`;
 }
 
-/**
- * Fetch chapter HTML by its full slug-chapter segment.
- */
-export async function fetchChapter(slugAndChapter: string): Promise<any> {
-  const url = `${BASE_URL}/reader/en/${slugAndChapter}/`;
-  const response = await fetch(url);
+/** Fetch and parse one chapter, including its page images. */
+export async function fetchChapter(chapterId: string, config: Config, limiter?: RateLimitBinding): Promise<Chapter> {
+	const response = await fetchUpstream(readerPath(chapterId), config, {
+		describe: `Chapter '${chapterId}'`,
+		limiter,
+	});
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch chapter (${slugAndChapter}): ${response.status}`);
-  }
+	const chapter = await parseChapter(response, chapterId, config.baseUrl);
 
-  const html = await response.text();
-  return parseChapterHtml(html);
+	// A reader page with no images is never legitimate: either the chapter is
+	// paywalled/removed, or the image markup changed. Fail loudly.
+	if (chapter.images.length === 0) {
+		throw parseError(`page images for '${chapterId}'`, readerPath(chapterId));
+	}
+
+	return chapter;
 }

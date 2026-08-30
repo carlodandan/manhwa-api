@@ -1,125 +1,171 @@
 // src/index.ts
 
-import { fetchAllMostViewed } from './handlers/mostViewed';
-import { fetchManhwa } from './handlers/manhwa';
+import { Hono } from 'hono';
+import { POLICIES } from './lib/cache';
+import type { AppEnv } from './lib/env';
 import { fetchChapter } from './handlers/chapter';
+import { fetchHome, fetchRanking } from './handlers/home';
+import { fetchChapterList, fetchManhwa } from './handlers/manhwa';
 import { searchManhwa } from './handlers/search';
+import { errorHandler, jsonWithCache, withConfig, withCors, withEdgeCache, withRateLimit } from './middleware';
+import { parseChapterId, parsePagination, parsePeriod, parseSearchTerm, parseSlug } from './lib/validate';
+
+const app = new Hono<AppEnv>();
+
+app.use('*', withConfig);
+app.use('*', withCors);
+app.onError(errorHandler);
+
+// Search gets its own, tighter budget: clients fire it on every keystroke.
+app.use(
+	'/v1/search',
+	withRateLimit((env) => env.SEARCH_LIMITER),
+);
+app.use(
+	'/autocomplete',
+	withRateLimit((env) => env.SEARCH_LIMITER),
+);
+app.use(
+	'/v1/*',
+	withRateLimit((env) => env.READ_LIMITER),
+);
+app.use(
+	'/home',
+	withRateLimit((env) => env.READ_LIMITER),
+);
+app.use(
+	'/manhwa/*',
+	withRateLimit((env) => env.READ_LIMITER),
+);
+app.use(
+	'/reader/*',
+	withRateLimit((env) => env.READ_LIMITER),
+);
+
+app.use('/v1/*', withEdgeCache);
+app.use('/home', withEdgeCache);
+app.use('/manhwa/*', withEdgeCache);
+app.use('/reader/*', withEdgeCache);
+app.use('/autocomplete', withEdgeCache);
+
+app.options('*', (c) => c.body(null, 204));
+
+app.get('/', (c) =>
+	jsonWithCache(
+		c,
+		{
+			name: 'manhwa-api',
+			version: 'v1',
+			endpoints: [
+				{ path: '/v1/home', description: 'Most-viewed rankings. Optional ?period=1d|1w|1m' },
+				{ path: '/v1/search?term={term}', description: 'Search series by title (min 2 chars)' },
+				{ path: '/v1/manhwa/{slug}', description: 'Series details plus recent chapters' },
+				{
+					path: '/v1/manhwa/{slug}/chapters',
+					description: 'Full chapter list. Supports ?page= and ?per_page=',
+				},
+				{ path: '/v1/chapters/{chapterId}', description: 'Chapter page images and neighbours' },
+			],
+			notes: [
+				'chapterId comes from a chapter listing and is opaque; do not construct it.',
+				'Unversioned paths (/home, /manhwa/{slug}, /autocomplete) are deprecated aliases.',
+			],
+		},
+		POLICIES.root,
+	),
+);
+
+app.get('/v1/home', async (c) => {
+	const limiter = c.env.UPSTREAM_LIMITER;
+	const config = c.get('config');
+	const raw = c.req.query('period');
+
+	// ?period= returns one period; omitting it returns all three.
+	if (raw !== undefined) {
+		const period = parsePeriod(raw);
+		return jsonWithCache(c, await fetchRanking(period, config, limiter), POLICIES.home);
+	}
+
+	return jsonWithCache(c, await fetchHome(config, limiter), POLICIES.home);
+});
+
+app.get('/v1/search', async (c) => {
+	const term = parseSearchTerm(c.req.query('term') ?? null);
+	const results = await searchManhwa(term, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, { term, count: results.length, results }, POLICIES.search);
+});
+
+app.get('/v1/manhwa/:slug/chapters', async (c) => {
+	const slug = parseSlug(c.req.param('slug'));
+	const { page, perPage } = parsePagination(new URL(c.req.url));
+	const list = await fetchChapterList(slug, page, perPage, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, list, POLICIES.chapterList);
+});
+
+app.get('/v1/manhwa/:slug', async (c) => {
+	const slug = parseSlug(c.req.param('slug'));
+	const manhwa = await fetchManhwa(slug, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, manhwa, POLICIES.manhwa);
+});
+
+app.get('/v1/chapters/:chapterId', async (c) => {
+	const chapterId = parseChapterId(c.req.param('chapterId'));
+	const chapter = await fetchChapter(chapterId, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, chapter, POLICIES.chapter);
+});
+
+/**
+ * Deprecated unversioned aliases, kept so existing clients keep working.
+ *
+ * `/reader/en/{chapterId}` is preserved in shape only: the id is upstream's own
+ * chapter slug, not `{slug}-chapter-{n}` as the original route documented.
+ */
+app.get('/home', async (c) => jsonWithCache(c, await fetchHome(c.get('config'), c.env.UPSTREAM_LIMITER), POLICIES.home));
+
+app.get('/autocomplete', async (c) => {
+	const term = parseSearchTerm(c.req.query('term') ?? null);
+	const results = await searchManhwa(term, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, results, POLICIES.search);
+});
+
+app.get('/manhwa/:slug', async (c) => {
+	const slug = parseSlug(c.req.param('slug'));
+	const manhwa = await fetchManhwa(slug, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, manhwa, POLICIES.manhwa);
+});
+
+app.get('/reader/en/:chapterId', async (c) => {
+	const chapterId = parseChapterId(c.req.param('chapterId'));
+	const chapter = await fetchChapter(chapterId, c.get('config'), c.env.UPSTREAM_LIMITER);
+	return jsonWithCache(c, chapter, POLICIES.chapter);
+});
+
+app.notFound((c) => {
+	c.header('Content-Type', 'application/json; charset=utf-8');
+	c.header('Cache-Control', 'no-store');
+	return c.body(JSON.stringify({ error: { code: 'not_found', message: 'Unknown endpoint' } }), 404);
+});
 
 export default {
-  async fetch(request: Request): Promise<Response> {
-    // CORS preflight
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        },
-      });
-    }
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		// HEAD is handled by running the GET route and dropping the body, so clients
+		// can probe cheaply instead of getting a 405.
+		if (request.method === 'HEAD') {
+			const response = await app.fetch(new Request(request.url, { method: 'GET', headers: request.headers }), env, ctx);
+			return new Response(null, { status: response.status, headers: response.headers });
+		}
 
-    // Only GET
-    if (request.method !== 'GET') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-        status: 405,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      });
-    }
+		if (request.method !== 'GET' && request.method !== 'OPTIONS') {
+			return new Response(JSON.stringify({ error: { code: 'method_not_allowed', message: 'Only GET is supported' } }), {
+				status: 405,
+				headers: {
+					'Content-Type': 'application/json; charset=utf-8',
+					Allow: 'GET, HEAD, OPTIONS',
+					'Access-Control-Allow-Origin': '*',
+				},
+			});
+		}
 
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // Root: return available endpoints
-    if (path === '/') {
-      return jsonResponse({
-        endpoints: [
-          {
-            path: '/home',
-            description: 'Most-viewed manhwa (periods: 1d, 1w, 1m)',
-          },
-          {
-            path: '/manhwa/{slug}',
-            description: 'Manhwa details by slug',
-          },
-          {
-            path: '/reader/en/{slug}-chapter-{chapterNumber}',
-            description: 'Chapter images and metadata',
-          },
-          {
-            path: '/autocomplete?term={query}',
-            description: 'Search manhwa by term',
-          },
-        ],
-      }, 200, 3600); // Cache for 1 hour
-    }
-
-    // Cache for other endpoints
-    const cache = caches.default;
-    const cacheKey = new Request(request.url);
-    const cached = await cache.match(cacheKey);
-    if (cached) return cached;
-
-    try {
-      let responseData: any;
-      let cacheDuration = 300; // default 5 min
-
-      if (path === '/home') {
-        // Home: most-viewed
-        responseData = await fetchAllMostViewed();
-        cacheDuration = 300;
-      } else if (path.startsWith('/manhwa/')) {
-        // Manhwa detail
-        const slug = path.split('/')[2];
-        if (!slug) {
-          return jsonResponse({ error: 'Invalid slug' }, 400);
-        }
-        responseData = await fetchManhwa(slug);
-        cacheDuration = 600;
-      } else if (path.startsWith('/reader/en/')) {
-        // Chapter reader
-        const parts = path.split('/').filter(Boolean);
-        if (parts.length < 3) {
-          return jsonResponse({ error: 'Invalid chapter URL' }, 400);
-        }
-        const slugAndChapter = parts.slice(2).join('/');
-        responseData = await fetchChapter(slugAndChapter);
-        cacheDuration = 3600;
-      } else if (path === '/autocomplete') {
-        // Search autocomplete
-        const term = url.searchParams.get('term') || '';
-        responseData = await searchManhwa(term);
-        cacheDuration = 300;
-      } else {
-        return jsonResponse({ error: 'Not found' }, 404);
-      }
-
-      const response = jsonResponse(responseData, 200, cacheDuration);
-      await cache.put(cacheKey, response.clone());
-      return response;
-    } catch (error: any) {
-      return jsonResponse(
-        { error: error.message || 'Internal server error' },
-        500
-      );
-    }
-  },
-};
-
-function jsonResponse(data: any, status: number, cacheDuration?: number): Response {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  };
-
-  if (cacheDuration) {
-    headers['Cache-Control'] = `public, max-age=${cacheDuration}`;
-  }
-
-  return new Response(JSON.stringify(data), {
-    status,
-    headers,
-  });
-}
+		return app.fetch(request, env, ctx);
+	},
+} satisfies ExportedHandler<Env>;
